@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'identifier',
     'accountlink',
     "monitor",
+    'compression.apps.CompressionConfig',
     'django_cleanup.apps.CleanupConfig',  # 必须放在最后(文档所言)
 ]
 
@@ -369,6 +370,17 @@ LOGGING = {
         "handlers": ["root"],
     },
 }
+
+# 录像压缩。Credit: DeepSeek
+# 压缩算法参数配置
+COMPRESSION_PARAMS = {
+    'lzma': {'preset': 9},     # LZMA最高压缩率
+    'gz': {'compresslevel': 6},# Gzip平衡模式
+    'zstd': {'level': 3}       # Zstandard默认级别
+}
+
+# 当前激活的压缩算法扩展名
+ACTIVE_COMPRESSION_EXT = 'lzma'
 
 SETTINGS_PATH = os.path.normpath(os.path.dirname(__file__))
 TEMPLATE_DIRS = (

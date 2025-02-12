@@ -12,6 +12,9 @@ import ms_toollib as ms
 from accountlink.models import AccountSaolei
 import datetime
 from utils.getOldWebData import VideoData, Level
+import gzip
+from django.core.files.base import ContentFile
+from ms_toollib import AvfVideo, EvfVideo, MvfVideo, RmvVideo
 
 logger = logging.getLogger('videomanager')
 cache = get_redis_connection("saolei_website")
@@ -273,11 +276,15 @@ def new_video(data, user):
 
 
 def refresh_video(video: VideoModel):
-    if video.file.path.endswith('.avf'):
-        v = ms.AvfVideo(video.file.path)
+    file = video.file.decompressed_data
+    file_data = file.read()
+    file_name = file.name
+
+    if file_name.endswith('.avf'):
+        v = ms.AvfVideo(file_name, file_data)
         video.software = 'a'
-    elif video.file.path.endswith('.evf'):
-        v = ms.EvfVideo(video.file.path)
+    elif file_name.endswith('.evf'):
+        v = ms.EvfVideo(file_name, file_data)
         video.software = 'e'
     else:
         return
@@ -364,3 +371,62 @@ def video_saolei_import_by_userid_helper(userProfile: UserProfile, accountSaolei
     videodata.getData(Level.Beg, beginTime, endTime)
     videodata.getData(Level.Int, beginTime, endTime)
     videodata.getData(Level.Exp, beginTime, endTime)
+def create_with_file(player: UserProfile, file: MSVideoContentFile):
+    raw_file = file.to_decompressed()
+    raw_name = raw_file.name
+    print(raw_file.read()[:-100])
+    if raw_name.endswith('.evf'):
+        software = 'e'
+        v = EvfVideo(raw_name, raw_file.file.getvalue())
+    elif raw_name.endswith('.avf'):
+        software = 'a'
+        v = AvfVideo(raw_name, raw_file.file.getvalue())
+    elif raw_name.endswith('.mvf'):
+        software = 'm'
+        v = MvfVideo(raw_name, raw_file.file.getvalue())
+    elif raw_name.endswith('.rmv'):
+        software = 'r'
+        v = RmvVideo(raw_name, raw_file.file.getvalue())
+    else:
+        raise UnsupportedFileFormatError()
+        
+    v.parse_video()
+    v.analyse()
+    v.current_time = 1e8
+
+    level = MINESWEEPER_LEVELS[v.level]
+    if level is None or level == "" or level == "c":
+        raise UnsupportedLevelError()
+    
+    valid_state = v.is_valid()
+    if valid_state == 0:
+        state = MS_TextChoices.State.OFFICIAL
+    elif valid_state == 1:
+        raise InvalidVideoError()
+    elif valid_state == 3:
+        state = MS_TextChoices.State.PLAIN
+    else:
+        raise UnknownStateError()
+    
+    identifier = bytes(v.player_identifier).decode('utf-8')
+    if not verify_identifier(identifier):
+        raise InvalidIdentifierError()
+    if state == MS_TextChoices.State.OFFICIAL and identifier not in player.userms.identifiers:
+        state = MS_TextChoices.State.IDENTIFIER
+    
+    new_ext_videomodel = ExpandVideoModel.objects.create(
+        identifier=identifier, stnb=v.stnb, rqp=v.rqp
+    )
+    return VideoModel.objects.create(
+        player=player, video=new_ext_videomodel,
+        file=raw_file.to_compressed(), state=state,
+        software=software, level=level, mode=v.mode,
+        timems=v.rtime_ms, bv=v.bbbv,
+        left=v.left, right=v.right, double=v.double,
+        left_ce=v.lce, right_ce=v.rce, double_ce=v.dce,
+        path=v.path, flag=v.flag, op=v.op, isl=v.isl,
+        cell0=v.cell0, cell1=v.cell1, cell2=v.cell2,
+        cell3=v.cell3, cell4=v.cell4, cell5=v.cell5,
+        cell6=v.cell6, cell7=v.cell7, cell8=v.cell8
+    )
+    

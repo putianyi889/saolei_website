@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from django.db import models
-from .fields import RestrictedFileField
+from .fields import CompressedFileField
 from userprofile.models import UserProfile
 from config.global_settings import DefaultRankingScores
 from django_redis import get_redis_connection
@@ -8,6 +8,8 @@ import json
 from utils import ComplexEncoder
 from config.text_choices import MS_TextChoices
 from config.global_settings import MaxSizes
+import gzip
+from django.core.files.base import ContentFile
 cache = get_redis_connection("saolei_website")
 
 
@@ -52,7 +54,7 @@ class VideoModel(models.Model):
     # 用户
     player = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
     # 服务器端文件相对路径
-    file = RestrictedFileField(
+    file = CompressedFileField(
         upload_to="videos/%Y%m%d/", max_length=100, max_upload_size=MaxSizes.VIDEOFILE)
     url_web = models.TextField(max_length=255, blank=True, default="")
     url_file = models.TextField(max_length=255, blank=True, default="")

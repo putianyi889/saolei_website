@@ -24,6 +24,7 @@ class VideoManagerTestCase(TestCase):
             identifier='test', stnb=0, rqp=0)
         video = VideoModel.objects.create(player=self.user, file='test.evf', video=expandvideo, state='a', software='e', level='b', mode='00', timems=0, bv=1, left=1, right=0,
                                           double=0, path=0, flag=0, left_ce=1, right_ce=0, double_ce=0, op=1, isl=0, cell0=0, cell1=0, cell2=0, cell3=0, cell4=0, cell5=0, cell6=0, cell7=0, cell8=0)
+        video = VideoModel.objects.get(id=video.id)
 
         expected_values = {
             'software': 'e', 'level': 'b', 'mode': '00',
@@ -43,13 +44,43 @@ class VideoManagerTestCase(TestCase):
 
         self.multiple_values_test(video, expected_values)
 
+        try:
+            response = requests.get('https://github.com/putianyi889/replays/raw/refs/heads/master/EXP/sub40/Exp_FL_35.09_3BV=132_3BVs=3.76_Pu%20Tian%20Yi(Hu%20Bei).avf')
+        except:
+            response = requests.get('http://saolei.wang/Video/Mvf/9952/Pu Tian Yi_Exp_36.09(3bv132).avf')
+        video = create_with_file(self.user, MSVideoContentFile(response.content, name='Exp_FL_35.09_3BV=132_3BVs=3.76_Pu Tian Yi(Hu Bei).avf'))
+
+        expected_values = {
+            'file_size': 49134,
+            'software': 'a', 'level': 'e', 'mode': '00',
+            'timems': 35090, 'bv': 132,
+            'left': 95, 'right': 20, 'double': 43,
+            'left_ce': 90, 'right_ce': 20, 'double_ce': 27,
+            'path': 5960.945576017859, 'flag': 20,
+            'op': 11, 'isl': 11,
+            'cell0': 90, 'cell1': 118, 'cell2': 103,
+            'cell3': 45, 'cell4': 24, 'cell5': 1,
+            'cell6': 0, 'cell7': 0, 'cell8': 0,
+        }
+
+        self.multiple_values_test(video, expected_values)
+
+        expected_extended_values = {
+            'identifier': 'Pu Tian Yi(Hu Bei)',
+            'stnb': 135.59774291678048,
+            'rqp': 9.328091666666667,
+        }
+
+        self.multiple_values_test(video.video, expected_extended_values)
+
     def test_refresh(self):
         response = requests.get(
-            'https://github.com/putianyi889/replays/raw/refs/heads/master/EXP/sub40/Exp_FL_35.09_3BV=132_3BVs=3.76_Pu%20Tian%20Yi(Hu%20Bei).avf')
-        expandvideo = ExpandVideoModel.objects.create(
-            identifier='test', stnb=0, rqp=0)
-        video = VideoModel.objects.create(player=self.user, file=ContentFile(
-            response.content, name='Exp_FL_35.09_3BV=132_3BVs=3.76_Pu Tian Yi(Hu Bei).avf'), video=expandvideo, state='a')
+        try:
+            response = requests.get('https://github.com/putianyi889/replays/raw/refs/heads/master/EXP/sub40/Exp_FL_35.09_3BV=132_3BVs=3.76_Pu%20Tian%20Yi(Hu%20Bei).avf')
+        except:
+            response = requests.get('http://saolei.wang/Video/Mvf/9952/Pu Tian Yi_Exp_36.09(3bv132).avf')
+        expandvideo = ExpandVideoModel.objects.create(identifier='test', stnb=0, rqp=0)
+        video = VideoModel.objects.create(player=self.user, file=ContentFile(response.content, name='Exp_FL_35.09_3BV=132_3BVs=3.76_Pu Tian Yi(Hu Bei).avf'), video=expandvideo, state='a')
         refresh_video(video)
 
         video = VideoModel.objects.get(id=video.id)
