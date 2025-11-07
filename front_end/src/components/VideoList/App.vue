@@ -1,6 +1,6 @@
 <template>
     <DataTable
-        v-model:filters="filters" :value="videos" paginator-position="both" filter-display="menu" 
+        v-model:filters="filters" :value="videos" filter-display="menu" row-hover
         style="min-width: 50em"
         :filter-button-props="{
             filter: {
@@ -11,6 +11,9 @@
                 style: { borderRadius: '0', padding: '0', width: '1rem' }
             }
         }"
+        sort-field="upload_time" :sort-order="-1"
+        :paginator="paginator" :rows="paginatorRows"
+        :rows-per-page-options="[5, 10, 25, 50, 100]"
         @row-click="(event: any) => preview(event.data.id)"
     >
         <component
@@ -52,7 +55,11 @@ defineProps({
     },
     paginator: {
         type: Boolean,
-        default: true,
+        default: false,
+    },
+    paginatorRows: {
+        type: Number,
+        default: 25,
     },
     sortable: {
         type: Boolean,
