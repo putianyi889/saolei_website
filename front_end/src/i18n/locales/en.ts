@@ -15,6 +15,7 @@ export default {
             videoQuery: 'fetch video data',
         },
         button: {
+            back: 'Back',
             cancel: 'Cancel',
             confirm: 'Confirm',
             register: 'Register',
@@ -185,6 +186,25 @@ export default {
             fastTooltip: 'Click to play the video',
             advanced: 'Advanced',
             advancedTooltip: 'Click to show list of videos',
+        },
+    },
+    errorMsg: {
+        file: {
+            title: 'Error while parsing file',
+            collision: 'File already exists',
+            level: 'Unsupported level',
+            review: 'Unknown review state. Please contact the developers.',
+            type: 'Unsupported file extension',
+        },
+        identifier: {
+            title: 'Invalid identifier',
+            verify: 'Not allowed by censorship',
+        },
+        import: {
+            title: 'Failed to import',
+            connection: 'Unable to connect to the target server',
+            readtimeout: 'The target server did not respond in time',
+            response: 'Unrecognised response',
         },
     },
     experimentalFeature: {
