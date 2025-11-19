@@ -168,6 +168,8 @@ class VideoSaolei(models.Model):
                 parser.state = MS_TextChoices.State.IDENTIFIER
 
             video = VideoModel.create_from_parser(parser, user)
+            video.upload_time = self.upload_time
+            video.save()
             video_checkin(video, parser.tournament_identifiers)
             video.update_redis()
             self.import_video = video
