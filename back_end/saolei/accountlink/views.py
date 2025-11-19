@@ -149,7 +149,7 @@ def import_saolei_videolist(request: HttpRequest):
         return JsonResponse({'type': 'error', 'obj': 'saolei', 'category': 'connection'})
 
     if new_video_list is None:
-        return HttpResponseNotFound()
+        return JsonResponse({'type': 'error', 'category': 'empty'})
     return JsonResponse({'type': 'success', 'data': [v.dict() for v in new_video_list]})
 
 
