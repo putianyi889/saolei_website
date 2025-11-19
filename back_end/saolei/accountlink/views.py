@@ -2,6 +2,7 @@ from django.forms.models import model_to_dict
 from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, HttpResponseNotFound, JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 from django_ratelimit.decorators import ratelimit
+import requests
 
 from userprofile.decorators import login_required_error, staff_required
 from userprofile.models import UserProfile
@@ -142,7 +143,11 @@ def import_saolei_videolist(request: HttpRequest):
     if not (page := request.POST.get('page')):
         return HttpResponseBadRequest()
     
-    new_video_list = account.import_video_list(page)
+    try:
+        new_video_list = account.import_video_list(page)
+    except requests.exceptions.ConnectionError:
+        return JsonResponse({'type': 'error', 'obj': 'saolei', 'category': 'connection'})
+
     if new_video_list is None:
         return HttpResponseNotFound()
     return JsonResponse({'type': 'success', 'data': [v.dict() for v in new_video_list]})
