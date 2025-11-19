@@ -12,6 +12,7 @@ lxml>=6.0.0
 ms_toollib==1.4.19
 psutil==5.9.1
 pymysql>=1.1.0
+pyo3_runtime>=0.0.1
 redis==5.0.1
 requests>=2.28.1
 websocket-client==1.8.0

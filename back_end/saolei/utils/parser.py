@@ -3,6 +3,7 @@ from config.text_choices import MS_TextChoices
 from .exceptions import ExceptionToResponse
 import ms_toollib as ms
 from datetime import timezone, datetime
+import pyo3_runtime
 
 
 class MSVideoParser:
@@ -56,11 +57,13 @@ class MSVideoParser:
 
         self.level = MSVideoParser.get_level_from_BaseVideo(v)
 
-        self.state = MSVideoParser.get_state_from_review_code(v.is_valid())
+        try:
+            self.state = MSVideoParser.get_state_from_review_code(v.is_valid())
+        except pyo3_runtime.PanicException as e:
+            raise ExceptionToResponse(obj='rust', category='panic')
         self.identifier = v.player_identifier
         self.tournament_identifiers = v.race_identifier.split(',')
         self.end_time = datetime.fromtimestamp(v.end_time / 1000000, tz=timezone.utc)
-        print(self.end_time)
 
         self.mode = str(v.mode).rjust(2, '0')
         if self.mode == '00' and v.flag == 0:
