@@ -27,12 +27,12 @@ for (const name in ELIcons) {
 const myTheme = definePreset(Aura, {
     components: {
         datatable: {
-            bodyCell: {
-                padding: '0px 5px',
-            },
-            headerCell: {
-                padding: '0px 5px',
-            },
+            // bodyCell: {
+            //     padding: '1px 5px',
+            // },
+            // headerCell: {
+            //     padding: '1px 5px',
+            // },
         },
     },
 });

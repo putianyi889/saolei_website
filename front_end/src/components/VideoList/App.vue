@@ -1,7 +1,7 @@
 <template>
     <DataTable
         v-model:filters="filters" :value="videos" filter-display="menu" row-hover
-        style="min-width: 50em"
+        style="min-width: 50em" size="small"
         :filter-button-props="{
             filter: {
                 severity: 'secondary',
@@ -124,10 +124,3 @@ const filters = ref({
 });
 
 </script>
-
-<style lang="less" scoped>
-.p-datatable-popover-filter {
-    display: none;
-}
-
-</style>
