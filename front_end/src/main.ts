@@ -17,6 +17,16 @@ import i18n from '@/i18n';
 
 const app = createApp(App);
 
+if (import.meta.env.DEV) {
+    app.config.warnHandler = (msg, instance, trace) => {
+    // Suppress only the "extraneous non-props attributes" warning
+        if (msg.includes('Extraneous non-props attributes (data-cy)')) {
+            return;
+        }
+        console.warn(msg, trace);
+    };
+}
+
 app.config.globalProperties.$axios = $axios;
 
 
