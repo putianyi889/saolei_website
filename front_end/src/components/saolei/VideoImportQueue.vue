@@ -141,7 +141,7 @@ async function runImport(video: SaoleiVideo) {
                 return;
             case 'error':
                 video.import_state = SaoleiVideoImportState.FAILED;
-                generalErrorNotification(data.obj, data.category);
+                generalErrorNotification(data.object, data.category);
                 return;
             default:
                 unknownErrorNotification(data);

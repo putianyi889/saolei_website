@@ -1,3 +1,4 @@
+import { ArrayUtils } from '@/utils/arrays';
 import { SaoleiVideo } from './utils';
 
 type BaseLogTypes = 'videoStart' | 'videoSuccess' | 'videoError' | 'videoListStart' | 'videoListFinish' | 'videoListError' | 'pageEnd' | 'consoleError';
@@ -56,6 +57,7 @@ export class PageLog {
     public videoList: SaoleiVideo[] = [];
     public videoIndex: number = 0;
     public state: 'new' | 'normal' | 'end' | 'empty' = 'new';
+    public hasError: boolean = false;
 
     constructor(index: number) {
         this.index = index;
@@ -109,15 +111,16 @@ export class PageLog {
     /**
      * 录像列表加载错误
      */
-    public videoListError(obj: string, category: string) {
+    public videoListError(object: string, category: string) {
         this.videoLogs.push({
             time: new Date(Date.now()),
             type: 'videoListError',
             error: {
-                obj: obj,
+                object: object,
                 category: category,
             },
         });
+        this.hasError = true;
         this.pageEnd();
     }
 
@@ -125,6 +128,15 @@ export class PageLog {
      * 开始导入当前录像
      */
     public VideoStart() {
+        this.videoIndex++;
+        if (this.videoIndex >= this.videoList.length) {
+            this.videoLogs.push({
+                time: new Date(Date.now()),
+                type: 'pageEnd',
+            });
+            this.state = 'end';
+            return;
+        }
         this.videoLogs.push({
             time: new Date(Date.now()),
             type: 'videoStart',
@@ -135,35 +147,31 @@ export class PageLog {
     /**
      * 当前录像导入成功
      */
-    public videoSuccess() {
+    public videoSuccess(video?: SaoleiVideo) {
         this.videoLogs.push({
             time: new Date(Date.now()),
             type: 'videoSuccess',
             videoIndex: this.videoIndex,
         });
-        this.videoIndex++;
-        if (this.videoIndex >= this.videoList.length) {
-            this.videoLogs.push({
-                time: new Date(Date.now()),
-                type: 'pageEnd',
-            });
-            this.state = 'end';
+        if (video !== undefined) {
+            this.videoList[this.videoIndex] = video;
         }
     }
 
     /**
      * 当前录像导入报错
      */
-    public videoError(obj: string, category: string) {
+    public videoError(object: string, category: string) {
         this.videoLogs.push({
             time: new Date(Date.now()),
             type: 'videoError',
             videoIndex: this.videoIndex,
             error: {
-                obj: obj,
+                object: object,
                 category: category,
             },
         });
+        this.hasError = true;
     }
 
     /**
@@ -175,12 +183,12 @@ export class PageLog {
             type: 'consoleError',
             error: error,
         });
+        this.hasError = true;
     }
 }
 
 export class ImportLog {
     public pageLogs: PageLog[] = [];
-    public startingPage: number = 1;
     public pageIndex: number = -1;
     public startWhen: Date = new Date(Date.now());
     public endWhen?: Date;
@@ -200,9 +208,13 @@ export class ImportLog {
         return this.endWhen !== undefined;
     }
 
-    public newPage() {
+    public newPage(page: number | undefined = undefined) {
+        if (page !== undefined) {
+            this.pageLogs.push(new PageLog(page));
+        } else {
+            this.pageLogs.push(new PageLog(this.getCurrentPageLog().index + 1));
+        }
         this.pageIndex += 1;
-        this.pageLogs.push(new PageLog(this.startingPage + this.pageIndex));
     }
 
     public videoListStart() {
@@ -211,8 +223,8 @@ export class ImportLog {
     public videoListFinish(list: SaoleiVideo[]) {
         this.getCurrentPageLog().videoListFinish(list);
     }
-    public videoListError(obj: string, category: string) {
-        this.getCurrentPageLog().videoListError(obj, category);
+    public videoListError(object: string, category: string) {
+        this.getCurrentPageLog().videoListError(object, category);
     }
     public videoListEmpty() {
         this.getCurrentPageLog().videoListFinish([]);
@@ -223,11 +235,11 @@ export class ImportLog {
     public videoStart() {
         this.getCurrentPageLog().VideoStart();
     }
-    public videoSuccess() {
-        this.getCurrentPageLog().videoSuccess();
+    public videoSuccess(video?: SaoleiVideo) {
+        this.getCurrentPageLog().videoSuccess(video);
     }
-    public videoError(obj: string, category: string) {
-        this.getCurrentPageLog().videoError(obj, category);
+    public videoError(object: string, category: string) {
+        this.getCurrentPageLog().videoError(object, category);
     }
 
     public consoleError(error: any) {

@@ -201,8 +201,13 @@ export default {
         import: {
             title: '导入失败！',
             connection: '无法连接到目标服务器',
+            importing: '正在导入中，请稍后重试',
             readtimeout: '目标服务器响应超时',
             response: '无法识别的响应',
+        },
+        rust: {
+            title: '录像解析器崩溃！',
+            panic: '录像解析器发生未知错误，请联系开发者',
         },
     },
     experimentalFeature: {

@@ -51,6 +51,6 @@ export function unknownErrorNotification(error: any) {
     baseErrorNotification(t('msg.unknownError'), error);
 }
 
-export function generalErrorNotification(obj: string, category: string) {
-    baseErrorNotification(t(`errorMsg.${obj}.title`), t(`errorMsg.${obj}.${category}`));
+export function generalErrorNotification(object: string, category: string) {
+    baseErrorNotification(t(`errorMsg.${object}.title`), t(`errorMsg.${object}.${category}`));
 }

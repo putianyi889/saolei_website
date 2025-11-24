@@ -203,8 +203,13 @@ export default {
         import: {
             title: 'Failed to import',
             connection: 'Unable to connect to the target server',
+            importing: 'Video is already being imported, please try again later',
             readtimeout: 'The target server did not respond in time',
             response: 'Unrecognised response',
+        },
+        rust: {
+            title: 'Video parser crashed',
+            panic: 'The video parser encountered an unknown error. Please contact the developers.',
         },
     },
     experimentalFeature: {

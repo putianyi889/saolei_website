@@ -18,6 +18,19 @@ export interface SaoleiVideo {
     import_video?: number;
 }
 
+export function saoleiVideoFromResponse(data: any): SaoleiVideo {
+    return {
+        id: data.id,
+        level: data.level,
+        timems: data.timems,
+        bv: data.bv,
+        nf: data.nf,
+        upload_time: new Date(data.upload_time),
+        import_state: data.import_state,
+        import_video: data.import_video,
+    };
+}
+
 export interface VideoImportEvent {
     time: Date;
     type: 'start' | 'success' | 'error' | 'getList' | 'pageEnd' | 'pageError' | 'noVideo' | 'newVideo' | 'consoleError';
