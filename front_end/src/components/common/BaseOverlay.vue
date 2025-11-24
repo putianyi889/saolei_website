@@ -1,5 +1,5 @@
 <template>
-    <el-link @click.stop="visible = true">
+    <el-link :underline="underline" @click.stop="visible = true">
         <slot />
     </el-link>
     <el-dialog v-model="visible" width="100%" align-center body-class="center" :show-close="false" append-to-body :z-index="zIndex">
@@ -23,6 +23,10 @@ defineProps({
     zIndex: {
         type: Number,
         default: undefined,
+    },
+    underline: {
+        type: Boolean,
+        default: true,
     },
 });
 
