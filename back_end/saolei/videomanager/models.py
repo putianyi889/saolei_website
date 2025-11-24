@@ -169,7 +169,9 @@ class VideoModel(models.Model):
         """
         注意：
         - 执行之前：
+          - 检查录像数量
           - 检查identifier
+          - 检查用户是否匿名
         - 执行之后：
           - 检查比赛标识
           - 刷新排行

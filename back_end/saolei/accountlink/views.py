@@ -8,7 +8,7 @@ from userprofile.decorators import login_required_error, staff_required
 from userprofile.models import UserProfile
 from utils.response import HttpResponseConflict
 from utils.exceptions import ExceptionToResponse
-from .models import AccountLinkQueue, Platform, PLATFORM_CONFIG, VideoSaolei, AccountSaolei
+from .models import AccountLinkQueue, Platform, PLATFORM_CONFIG, VideoSaolei, AccountSaolei, SaoleiVideoImportState
 from .utils import delete_account, link_account, update_account
 
 private_platforms = ["q"]  # 私人账号平台
@@ -129,6 +129,16 @@ def update_link(request):
 @require_POST
 @login_required_error
 def import_saolei_videolist(request: HttpRequest):
+    """
+    请求参数:
+        user_id (str, optional): 管理员可指定用户ID来导入其他用户的录像。若未指定则导入当前登录用户的录像
+        page (str): 页码，将该页未加入队列的录像加入队列，并返回加入的录像。如果页码为0则返回队列中所有未导入的录像
+        
+    异常处理:
+        - 用户不存在返回404
+        - 用户没有绑定扫雷网账号返回403
+        - 连接错误返回错误JSON响应
+    """
     if request.user.is_staff:
         if user_id := request.POST.get('user_id'):
             if not (user := UserProfile.objects.filter(id=user_id).first()):
@@ -138,19 +148,27 @@ def import_saolei_videolist(request: HttpRequest):
     else:
         user = request.user
 
-    if not (account := user.account_saolei):  # 普通用户前端不应当出现此问题
-        return HttpResponseForbidden()
-    if not (page := request.POST.get('page')):
-        return HttpResponseBadRequest()
-    
     try:
-        new_video_list = account.import_video_list(page)
-    except requests.exceptions.ConnectionError:
-        return JsonResponse({'type': 'error', 'obj': 'saolei', 'category': 'connection'})
+        account = user.account_saolei
+    except UserProfile.account_saolei.RelatedObjectDoesNotExist:
+        return JsonResponse({'type': 'error', 'obj': 'saolei', 'category': 'not_linked'})
 
-    if new_video_list is None:
-        return JsonResponse({'type': 'error', 'category': 'empty'})
-    return JsonResponse({'type': 'success', 'data': [v.dict() for v in new_video_list]})
+    try:
+        page = int(request.POST.get('page'))
+    except:
+        return HttpResponseBadRequest()
+
+    if page == 0:
+        video_list = list(account.videos.exclude(import_state=SaoleiVideoImportState.IMPORTED).values('id', 'upload_time', 'level', 'bv', 'timems', 'nf', 'import_state', 'import_video'))
+    else:
+        try:
+            video_list = [v.dict() for v in account.import_video_list(page)]
+        except ExceptionToResponse as e:
+            return e.response()
+        except requests.exceptions.ConnectionError:
+            return JsonResponse({'type': 'error', 'obj': 'saolei', 'category': 'connection'})
+
+    return JsonResponse({'type': 'success', 'data': video_list}, safe=False)
 
 
 @require_GET

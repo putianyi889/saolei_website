@@ -92,15 +92,13 @@ class AccountSaolei(models.Model):
         saolei_user = SaoleiUserInfo(saolei_id=self.id)
         video_list = SaoleiUtils.get_video_list(saolei_user.videos_url(page=page))
         if not video_list:
-            return None
+            raise ExceptionToResponse(obj='saolei', category='empty')
         existing_video_ids = list(VideoSaolei.objects.filter(id__in=[info.id for info in video_list]).values_list('id', flat=True))
 
-        count = 0
         new_video_list = []
         for video_info in video_list:
             if video_info.id not in existing_video_ids:
                 VideoSaolei.objects.create(id=video_info.id, user=self, upload_time=video_info.upload_time, level=video_info.level, bv=video_info.bv, timems=video_info.timems, nf=video_info.nf)
-                count += 1
                 new_video_list.append(video_info)
 
         return new_video_list
@@ -134,7 +132,9 @@ class VideoSaolei(models.Model):
 
     def run_import(self):
         if self.import_state == SaoleiVideoImportState.IMPORTING:
-            return
+            self.import_state = SaoleiVideoImportState.FAILED
+            self.save()
+            raise ExceptionToResponse(obj='import', category='importing')
         self.import_state = SaoleiVideoImportState.IMPORTING
         self.save()
         try:
@@ -183,7 +183,7 @@ class VideoSaolei(models.Model):
             self.import_state = SaoleiVideoImportState.FAILED
             self.save()
             raise ExceptionToResponse(obj='import', category='readtimeout')
-        except Exception as e:
+        except BaseException as e:
             self.import_state = SaoleiVideoImportState.FAILED
             self.save()
             raise e
