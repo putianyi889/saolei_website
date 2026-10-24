@@ -30,6 +30,7 @@
                 </template>
             </MiniGameBoard>
         </MiniGameFrame>
+        <slot name="resultActions" />
         <template v-if="replay.data.value && replay.frame.value">
             <ReplayControls :playback="replay.playback" :position-ms="replay.frame.value.timeMs" />
             <ReplayAnalysis :replay="replay.data.value" game="flag-chord" @preview="replay.hover" />
@@ -46,6 +47,7 @@ import '@/components/MiniGame/training.css';
 import { Counter } from '@putianyi888/vue3-minesweeper-board';
 import { useRafFn } from '@vueuse/core';
 import { computed, ref, shallowRef, useId, watch } from 'vue';
+import type { VNode } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import MiniGameBoard from '@/components/MiniGame/Board.vue';
@@ -63,7 +65,8 @@ import { minigameSettings } from '@/utils/minigame/settings';
 import { useTrainingReplay } from '@/utils/minigame/useTrainingReplay';
 
 defineProps({ offline: { type: Boolean, default: false } });
-const emit = defineEmits<{ completed: [rankingKey: string, scoreMs: number, replay: TrainingRecording] }>();
+const emit = defineEmits<{ completed: [rankingKey: string, scoreMs: number, replay: TrainingRecording]; reset: [] }>();
+defineSlots<{ resultActions?: () => VNode[] }>();
 const level = ref<typeof flagChordModes[number]['key']>('b');
 const levelGroupName = useId();
 const mode = computed(() => {
@@ -77,7 +80,7 @@ const phase = ref(game.phase);
 const remaining = ref(game.remaining);
 const elapsed = ref(0);
 const round = ref(0);
-let recorder = new TrainingReplayRecorder('flag-chord', board.value);
+let recorder = new TrainingReplayRecorder({ game: 'flag-chord', mode: game.mode }, board.value);
 const replay = useTrainingReplay();
 const { pause, resume } = useRafFn(() => {
     elapsed.value = game.elapsedMs(performance.now());
@@ -91,8 +94,9 @@ function restart() {
     phase.value = game.phase;
     remaining.value = game.remaining;
     elapsed.value = 0;
-    recorder = new TrainingReplayRecorder('flag-chord', board.value);
+    recorder = new TrainingReplayRecorder({ game: 'flag-chord', mode: game.mode }, board.value);
     round.value++;
+    emit('reset');
 }
 
 function onAction(action: ClassicMouseAction, row: number, column: number, now: number) {
@@ -104,8 +108,8 @@ function onAction(action: ClassicMouseAction, row: number, column: number, now: 
     const recording = recorder.update(now, phase.value, elapsed.value);
     replay.finish(recording);
     if (game.phase === 'won' && recording !== null) {
-        void saveMinigameResult({ game: 'flag-chord', mode: game.mode, scoreMs: elapsed.value, replay: recording });
-        emit('completed', `flag-chord-${game.mode.key}-v1`, elapsed.value, { initialBoard: recording.initialBoard, events: recording.events });
+        void saveMinigameResult({ game: 'flag-chord', mode: game.mode, scoreMs: elapsed.value, replay: recording.recording });
+        emit('completed', `flag-chord-${game.mode.key}-v1`, elapsed.value, recording.recording);
     }
     if (game.phase === 'playing') resume();
     else pause();

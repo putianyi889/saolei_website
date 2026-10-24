@@ -25,6 +25,7 @@
                 :label="t('local.boardLabel')" @action="onAction"
             />
         </MiniGameFrame>
+        <slot name="resultActions" />
         <TrainingResults v-if="phase === 'won'" :times-ms="roundTimes" @hover="hoveredRound = $event" />
         <p class="text text-small">
             {{ t('local.rules') }}
@@ -38,6 +39,7 @@ import '@/components/MiniGame/training.css';
 import { Counter } from '@putianyi888/vue3-minesweeper-board';
 import { useRafFn } from '@vueuse/core';
 import { computed, ref, shallowRef, useId, watch } from 'vue';
+import type { VNode } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import TrainingResults from './Results.vue';
@@ -49,10 +51,13 @@ import { offlineDownloadFilename, offlineDownloadUrl } from '@/utils/minigame/ga
 import { saveMinigameResult } from '@/utils/minigame/history';
 import { missingCellModes, missingCellRounds, MissingCellTraining, reviewMissingCellRound } from '@/utils/minigame/missingCellTraining';
 import type { MissingCellRoundResult } from '@/utils/minigame/missingCellTraining';
+import { encodeMissingCellRecording } from '@/utils/minigame/recording';
+import type { MissingCellRecording } from '@/utils/minigame/recording';
 import { minigameSettings } from '@/utils/minigame/settings';
 
 defineProps({ offline: { type: Boolean, default: false } });
-const emit = defineEmits<{ completed: [rankingKey: string, scoreMs: number, replay: { rounds: readonly MissingCellRoundResult[] }] }>();
+const emit = defineEmits<{ completed: [rankingKey: string, scoreMs: number, replay: MissingCellRecording]; reset: [] }>();
+defineSlots<{ resultActions?: () => VNode[] }>();
 const level = ref<typeof missingCellModes[number]['key']>('b');
 const levelGroupName = useId();
 const mode = computed(() => {
@@ -88,6 +93,7 @@ function restart() {
     round.value++;
     roundResults.value = [];
     hoveredRound.value = null;
+    emit('reset');
 }
 
 function onAction(action: ClassicMouseAction, row: number, column: number) {
@@ -100,8 +106,9 @@ function onAction(action: ClassicMouseAction, row: number, column: number) {
     elapsed.value = game.elapsedMs(now);
     roundResults.value = game.roundResults;
     if (game.phase === 'won') {
-        void saveMinigameResult({ game: 'missing-cell', mode: game.mode, scoreMs: elapsed.value, rounds: roundResults.value });
-        emit('completed', `missing-cell-${game.mode.key}-v1`, elapsed.value, { rounds: roundResults.value });
+        const recording = encodeMissingCellRecording(game.mode, roundResults.value);
+        void saveMinigameResult({ game: 'missing-cell', mode: game.mode, scoreMs: elapsed.value, ...recording });
+        emit('completed', `missing-cell-${game.mode.key}-v1`, elapsed.value, recording);
     }
     if (game.phase === 'playing') resume();
     else pause();
