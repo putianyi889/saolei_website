@@ -17,6 +17,17 @@ python manage.py rebuild_minigame_ranks --ranking-key left-click-b-50-v1
 
 首次部署先运行 `python manage.py migrate`。缓存也可在首次查询时按需初始化；Redis 故障期间查询降级至数据库。
 
+### `migrate_minigame_replays`
+
+部署脚本自动执行 `makemigrations` 和 `migrate`，保留原名 `replay` 的 JSONField 并新增二进制 `replay_archive`，不依赖提交迁移文件或交互确认字段改名。结构迁移完成后，此命令分批读取三种小游戏回放，转换为[回放格式 v1](./minigame-replay-format) 并压缩为 7z 写入 BinaryField；每条写入成功后清空旧 JSON。保留主键、玩家、榜单、成绩和达成时间，不访问或重建 Redis。
+
+```bash
+python manage.py migrate_minigame_replays --dry-run
+python manage.py migrate_minigame_replays
+```
+
+`--dry-run` 只校验并统计。已转换记录跳过；损坏或未知版本数据保留原值，报告记录 ID 和榜单 key，继续处理其他记录，最后以非零退出码结束。输出待转换、成功、跳过、错误数量，允许修复后重复执行。写入前核对成绩和达成时间，跳过期间出现的新最佳成绩。
+
 ## 录像缓存升级
 
 ### `compact_video_cache`
@@ -227,7 +238,9 @@ python manage.py refresh_video_counts
 
 命令按有效录像重算成绩，按新旧积分差额修正累计积分，并同步 Redis；不会重复累计积分或回退最后计分时间。执行期间避免修改该届录像、参赛者，并暂停相关用户的积分结算。数据库写入在一个事务内，失败会回滚；Redis 不随数据库回滚，排除故障后需重跑以恢复一致性。
 
-GSC 的 `manual_scores=true` 参赛者保留 9 项手工成绩，不从部分/空录像重算；普通成绩只统计符合模式、级别与 3BV 条件的 OFFICIAL 录像。匿名选手共同排名但不获得积分。历史补录后手动执行本命令；删除信号已撤回本人积分，本命令修正剩余名次和积分。操作顺序见 [GSC 历史录像补录](./gsc-history-import.md#重试与人工重算)。
+重算规则按比赛类型及成绩来源区分。经典打卡赛及 GSC 的录像来源成绩只统计现存且符合计分条件的录像，已删除录像的成绩贡献作废，由剩余录像或赛制默认值补位。GSC 的 `manual_scores=true` 按参赛者设置，保留其 9 项手工成绩，不从部分/空录像重算，但仍参与全场排名及积分更新；录像来源只统计符合模式、级别与 3BV 条件的 OFFICIAL 录像。匿名选手共同排名但不获得积分。
+
+普通删除录像不立即重算或撤分；显式执行本命令时才按上述规则更新成绩、名次和积分。删除参赛记录的信号则会撤回本人积分，本命令用于修正剩余名次和积分。历史补录后的操作顺序见 [GSC 历史录像补录](./gsc-history-import.md#重试与人工重算)。新增赛种或赛制时须提供自己的删除及重算实现，再接入命令，不能默认复用另一赛种的成绩来源规则。
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |

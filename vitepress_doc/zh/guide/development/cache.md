@@ -17,6 +17,8 @@ description: 开源扫雷网Redis/Django缓存结构详解，包括录像队列�
 redis-cli -n 0 DEL io_s_old io_r_old io_s_spds io_r_spds cpus
 ```
 
+扫雷网旧站爬取已停用，账号关联和历史数据查询保留。元数据写入和文件导入仍可接收调用方提供的数据；旧爬取任务不会再访问外站或写入业务数据。具体入口见仓库 `back_end/saolei/accountlink/README.md`。
+
 ## 服务器内存统计
 
 `GET /api/monitor/memoryusage` 同时返回进程内存 `memory` 和 Redis 分配内存 `redis`。`monitor/cache.py` 通过 Django `default` Redis 缓存保存完整返回体，逻辑 key 为 `api:monitor/memoryusage`，TTL 300 秒。命中不重新采集、不读取用户 ID、不续期；到期后的首次请求重新计算。不新增 APScheduler 任务。
@@ -46,7 +48,7 @@ Redis 分类只读取业务代码直接确定的 DB 0 key，不执行 `SCAN`、`
 
 成绩创建或严格改善后通过 `on_commit` 写 ZSET 和 Hash，删除后移除成员并保留初始化标记。接受并发和重建的偶发覆盖；运行 `manage.py rebuild_minigame_ranks [--ranking-key key]` 可恢复缓存，不改数据库成绩。完整接口与取舍见 `back_end/saolei/minigame/README.md`。
 
-最佳成绩对应的精简回放仅保存在 `MiniGameBestScore.replay` JSONField，不进入 Redis。缓存重建和排行榜数据库回源用 `defer('replay')` 排除回放字段。
+最佳成绩对应的 v1 JSON 回放压缩为 7z，仅保存在 `MiniGameBestScore.replay_archive` BinaryField，不进入 Redis。缓存重建和排行榜数据库回源用 `defer('replay', 'replay_archive')` 排除迁移保留的旧 JSON 及二进制回放字段。
 
 ### 用户姓名与隐私
 
@@ -115,8 +117,6 @@ digraph cache {
         create_account_link [label="/api/accountlink/create/"];
         delete_link [label="/accountlink/delete/"];
         update_link [label="/accountlink/update/"];
-        view_saolei_import_one_video [label="/accountlink/saolei_import_video/"];
-        view_saolei_import_videos [label="/accountlink/saolei_import_videos/"];
         view_saolei_get_import_list [label="/accountlink/saolei/videolist/get/"];
         view_saolei_get_import_summary [label="/accountlink/saolei/videoimport/stat/"];
         task_summary [label="/api/monitor/tasksummary"];
@@ -227,10 +227,12 @@ digraph cache {
         ];
         capture_video_update [label="capture_video_update"];
         refresh_state_queue_on_video_save [label="refresh_state_queue_on_video_save"];
+        delete_video_expansion [label="delete_video_expansion"];
         update_video_count_on_video_save [label="update_video_count_on_video_save"];
         update_video_count_limit_on_video_save [label="update_video_count_limit_on_video_save"];
         update_video_count_on_video_delete [label="update_video_count_on_video_delete"];
         refresh_custom_pluck_rank_on_video_save [label="refresh_custom_pluck_rank_on_video_save"];
+        refresh_custom_pluck_rank_on_video_delete [label="refresh_custom_pluck_rank_on_video_delete"];
         update_custom_pluck_cache_on_record_save [label="update_custom_pluck_cache_on_record_save"];
         update_custom_pluck_cache_on_record_delete [label="update_custom_pluck_cache_on_record_delete"];
         checkin_video_before_create [label="checkin_video_before_create"];
@@ -252,8 +254,6 @@ digraph cache {
             fillcolor="${#ede9fe|#4c1d95}",
             color="${#8b5cf6|#a78bfa}"
         ];
-        task_saolei_video_import_bulk [label="task_saolei_video_import_bulk"];
-        task_saolei_video_import [label="task_saolei_video_import"];
         task_gsc_finish [label="task_gsc_finish"];
         task_gsc_refresh_best [label="task_gsc_refresh_best"];
         task_award_tournament [label="task_award_tournament"];
@@ -272,40 +272,6 @@ digraph cache {
     delete_link -> accountlinkplatform_db;
     accountlinkplatform_db -> update_link;
     update_link -> accountlinkplatform_db;
-    videosaolei_db -> view_saolei_import_one_video;
-    accountlinkplatform_db -> view_saolei_import_one_video;
-    task_db -> view_saolei_import_one_video;
-    video_db -> view_saolei_import_one_video;
-    video_files -> view_saolei_import_one_video;
-    view_saolei_import_one_video -> task_db;
-    view_saolei_import_one_video -> videosaolei_db;
-    view_saolei_import_one_video -> video_db;
-    view_saolei_import_one_video -> video_files;
-    accountlinkplatform_db -> view_saolei_import_videos;
-    videosaolei_db -> view_saolei_import_videos;
-    task_db -> view_saolei_import_videos;
-    view_saolei_import_videos -> task_db [label="enqueue/delete"];
-    view_saolei_import_videos -> accountlinkplatform_db;
-    view_saolei_import_videos -> task_saolei_video_import_bulk [label="enqueue"];
-    task_db -> task_saolei_video_import_bulk [label="read/delete"];
-    accountlinkplatform_db -> task_saolei_video_import_bulk [label="read"];
-    videosaolei_db -> task_saolei_video_import_bulk [label="read/write"];
-    task_saolei_video_import_bulk -> videosaolei_db [label="write"];
-    task_saolei_video_import_bulk -> task_db [label="enqueue/delete"];
-    task_saolei_video_import_bulk -> task_saolei_video_import [label="enqueue each"];
-    task_db -> task_saolei_video_import [label="status/read"];
-    videosaolei_db -> task_saolei_video_import [label="read"];
-    accountlinkplatform_db -> task_saolei_video_import [label="FK read"];
-    userprofile_db -> task_saolei_video_import [label="O2O read"];
-    userms_db -> task_saolei_video_import [label="O2O read"];
-    identifier_db -> task_saolei_video_import [label="read"];
-    video_db -> task_saolei_video_import [label="collision/read"];
-    video_files -> task_saolei_video_import [label="read"];
-    task_saolei_video_import -> task_db [label="status write"];
-    task_saolei_video_import -> videosaolei_db [label="write"];
-    task_saolei_video_import -> userms_db [label="create"];
-    task_saolei_video_import -> video_db [label="write"];
-    task_saolei_video_import -> video_files [label="write"];
     userprofile_db -> view_saolei_get_import_list;
     accountlinkplatform_db -> view_saolei_get_import_list;
     videosaolei_db -> view_saolei_get_import_list;
@@ -530,6 +496,8 @@ digraph cache {
     video_db -> refresh_state_queue_on_video_save [label="O2O read"];
     userprofile_db -> refresh_state_queue_on_video_save [label="FK read"];
     refresh_state_queue_on_video_save -> newest_cache [label="write/delete"];
+    video_db -> delete_video_expansion [label="post_delete"];
+    delete_video_expansion -> video_db [label="delete expansion in transaction"];
 
     // msuser signals
     video_db -> update_video_count_on_video_save [label="post_save"];
@@ -558,6 +526,10 @@ digraph cache {
     userprofile_db -> refresh_custom_pluck_rank_on_video_save [label="FK read"];
     custom_pluck_db -> refresh_custom_pluck_rank_on_video_save [label="read"];
     refresh_custom_pluck_rank_on_video_save -> custom_pluck_db [label="write/delete"];
+    video_db -> refresh_custom_pluck_rank_on_video_delete [label="post_delete / on_commit read remaining"];
+    refresh_custom_pluck_rank_on_video_delete -> custom_pluck_db [label="on_commit backfill/write/delete"];
+    refresh_custom_pluck_rank_on_video_delete -> pluck_rank_cache [label="on_commit write/delete"];
+    refresh_custom_pluck_rank_on_video_delete -> pluck_detail_cache [label="on_commit write/delete"];
 
     custom_pluck_db -> update_custom_pluck_cache_on_record_save [label="post_save"];
     video_db -> update_custom_pluck_cache_on_record_save [label="FK read"];
@@ -565,8 +537,9 @@ digraph cache {
     update_custom_pluck_cache_on_record_save -> pluck_detail_cache [label="write"];
 
     custom_pluck_db -> update_custom_pluck_cache_on_record_delete [label="post_delete"];
-    update_custom_pluck_cache_on_record_delete -> pluck_rank_cache [label="delete"];
-    update_custom_pluck_cache_on_record_delete -> pluck_detail_cache [label="delete"];
+    custom_pluck_db -> update_custom_pluck_cache_on_record_delete [label="on_commit read current"];
+    update_custom_pluck_cache_on_record_delete -> pluck_rank_cache [label="on_commit write/delete"];
+    update_custom_pluck_cache_on_record_delete -> pluck_detail_cache [label="on_commit write/delete"];
 
     // tournament signals
     video_db -> checkin_video_before_create [label="pre_save"];
@@ -638,6 +611,16 @@ digraph cache {
 
 ## 缓存数据结构
 
+最新录像队列明确保持独立快照语义：删除 `VideoModel` 不移除 `newest_queue` 项，读取接口也不查询数据库过滤，因此可能返回已删除录像 ID。条目只按既有上限裁剪或由管理员单独移除。
+
+自定义 pluck 录像删除后，在事务提交时从剩余合格录像补位 `CustomPluckRecord` 和对应 Redis 项；纪录删除后的缓存同步也提交后重读当前数据库状态，回滚不发布这两项更新。
+
+比赛录像普通删除不立即重算，暂时保留已结算成绩、名次、积分和历史最好成绩，不刷新对应比赛积分与 best 排行。显式重算按赛种及成绩来源处理：打卡赛和 GSC 录像来源排除已删除录像，GSC 手工来源保留输入成绩，但两种来源均参与全场排名及积分更新。各新赛种须定义自己的删除、重算及 best 维护规则。站长 API 已返回受影响比赛 ID 并记录日志警告，隐藏中文页面已提供删除警告和确认；未来通知主办方的私信尚未实现，方案见仓库 `back_end/saolei/tournament/VIDEO_DELETION_PLAN.md`。
+
+`POST /api/video/admin/delete` 仅允许 superuser，会话请求校验 CSRF；JSON 请求体为 `{"id": 123}`，每次删除一个录像。`videomanager.services.delete_video_by_id` 在数据库事务内调用实例 `delete()`，触发现有扩展清理、录像计数及排行更新信号，不直接删除 Redis 队列项。排行重建期间，HTTP 准入在任何删除发生前返回 503；服务自身的共享准入覆盖数据库提交及删除回调。同路径 GET 仅检查 superuser 并初始化 CSRF cookie/token，响应禁止缓存。
+
+隐藏页面 `/#/superuser/delete-videos` 固定使用中文，不加入菜单或管理员标签页。页面在后端权限确认后接受 ID 列表，校验去重并逐个等待删除响应，显示删除、已不存在和受影响比赛。每次请求独立提交；错误、超时或手动停止会阻止后续请求，不自动重试，不恢复此前已成功项。单条请求仍会同步执行提交回调，不把 `on_commit` 当作后台任务。
+
 | 所属 app | key | Redis 类型 | 数据结构 |
 | --- | --- | --- | --- |
 | `minigame` | `minigame:rank:v1:{ranking_key}` | zset | `member = player_id`，score 为原始整数毫秒。 |
@@ -683,7 +666,7 @@ participant 删除时，`revoke_rank_score_on_participant_delete` 在删除事�
 | --- | --- | --- |
 | 录像状态队列 | `videomanager.signals.refresh_state_queue_on_video_save` | `videomanager.cache.add_videos_to_state_queues_bulk` 可按状态批量恢复普通队列。 |
 | 效率 Thrp 排行 | `effranking.signals` 与批量 services，提交后更新 | `rebuild_eff_ranks` 全量重建；管理员 `/api/effranking/thrp/admin/rebuild_record` 修复单项，sum 仅从个人 hash 重算。 |
-| 自定义 pluck 排行 | `customranking.services.update_custom_pluck_top_cache` | `manage.py rebuild_custom_pluck_cache` 从 `CustomPluckRecord` 全量重建。 |
+| 自定义 pluck 排行 | 保存时 `update_custom_pluck_top_cache`；录像删除提交后 `refresh_custom_pluck_rank` 补位，纪录删除提交后 `sync_custom_pluck_top_cache` 同步当前状态 | `manage.py rebuild_custom_pluck_cache` 从 `CustomPluckRecord` 全量重建，不补建缺失的数据库纪录。 |
 | NORMAL 比赛 | `TournamentCache.update_tournament` | `manage.py rebuild_tournament_cache` 显式查询 `NORMAL` GSC 与周赛并重建。 |
 | NORMAL 参赛关系 | `TournamentCache.update_participant` / `remove_participant` | `manage.py rebuild_tournament_cache` 按 `user_id` 分组重建。 |
 | 比赛积分排行 | `TournamentCache.update_tournament_user` / `update_tournament_users`；APScheduler 年度锚点更新 | `manage.py rebuild_tournament_user_cache` 重建全部 7 个 zset；`manage.py rebuild_tournament_current_score_cache` 原子重算当前积分 zset 和年度锚点。 |
