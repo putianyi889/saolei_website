@@ -19,12 +19,13 @@
 | 游戏 key | 列数 | 榜单 key |
 | --- | --- | --- |
 | `left-click` | 9 | `left-click-{level}-{density}-v1`；`level=b/i/e`，`density=50/75/87.5` |
+| `multi-touch` | 9 | `multi-touch-{level}-{density}-v1`；参数同左键训练，使用独立榜单 |
 | `flag-chord` | 2 | `flag-chord-b-v1`、`flag-chord-i-v1`；分别为 4 题、15 题，数字均为 1 |
 | `missing-cell` | 3 | `missing-cell-b-v1`、`missing-cell-i-v1`、`missing-cell-e-v1`；连续完成 10 局 |
 
 当前成绩均为整数毫秒，越小越好，范围为 `1..MAX_SAFE_INTEGER`；上限在 [global_settings.py](../config/global_settings.py) 定义为 `2**53 - 1`，兼容 JavaScript Number 和 Redis ZSET 的安全整数范围。配置也支持降序比较与读取。
 
-分类查询按组内任意一列排序，只包含该列有成绩的玩家，始终返回完整的 9／2／3 列，缺项为 `null`。`count` 按排序列统计。
+分类查询按组内任意一列排序，只包含该列有成绩的玩家，始终返回本组全部列：左键和多指各 9 列、标双 2 列、漏雷 3 列，缺项为 `null`。`count` 按排序列统计。
 
 ## API
 
@@ -43,11 +44,13 @@
 
 ## 持久化与缓存
 
-[models.py](./models.py) 保存最佳成绩、服务端达成时间及 `replay_archive` BinaryField，旧 `replay` JSONField 在数据转换完成前保留，`(ranking_key, score, id)` 索引用于回源排序。[services.py](./services.py) 负责提交与查询，[cache.py](./cache.py) 只负责缓存，不引用服务。缓存结构复用项目 [THRP](../effranking/thrp/cache.py) 与[自定义排行](../customranking/cache.py) 的 ZSET、Hash 和 pipeline 方案。
+[models.py](./models.py) 保存最佳成绩、服务端达成时间及 `replay_archive` BinaryField，`(ranking_key, score, id)` 索引用于回源排序。[services.py](./services.py) 负责提交与查询，[cache.py](./cache.py) 只负责缓存，不引用服务。缓存结构复用项目 [THRP](../effranking/thrp/cache.py) 与[自定义排行](../customranking/cache.py) 的 ZSET、Hash 和 pipeline 方案。
 
-回放使用前端本地历史相同的 v1 数据：左键、标双为 `{version: 1, cellSize, initialBoard, events, specialEvents}`；漏雷为 `{version: 1, rounds: [{board, target, timeMs}, ...]}`。棋盘压缩保存，鼠标事件使用整数像素坐标、数组及差分编码。接口仍接收 JSON 对象字符串，新建或改善成绩时由 [archive.py](./archive.py) 使用 py7zr 压缩为只含 UTF-8 `replay.json` 的 7z，再与成绩一起写入 BinaryField；使用 LZMA2、级别 1、1 MiB 字典。不重演或校验游戏规则。回放仅存数据库，不进入 Redis；排行榜及个人成绩响应均不包含回放，缓存重建和数据库回源查询用 `defer('replay', 'replay_archive')` 排除二进制及旧 JSON 字段。
+回放使用前端本地历史相同的 v1 数据：左键、标双为 `{version: 1, cellSize, initialBoard, events, specialEvents}`；漏雷为 `{version: 1, rounds: [{board, target, timeMs}, ...]}`。棋盘压缩保存，鼠标事件使用整数像素坐标、数组及差分编码。接口仍接收 JSON 对象字符串，新建或改善成绩时由 [archive.py](./archive.py) 使用 py7zr 压缩为只含 UTF-8 `replay.json` 的 7z，再与成绩一起写入 BinaryField；使用 LZMA2、级别 1、1 MiB 字典。不重演或校验游戏规则。回放仅存数据库，不进入 Redis；排行榜及个人成绩响应均不包含回放，缓存重建和数据库回源查询用 `defer('replay_archive')` 排除二进制字段。
 
-载荷及迁移规则见回放数据格式 v1 的[中文标准](../../../vitepress_doc/zh/guide/development/minigame-replay-format.md)及[英文标准](../../../vitepress_doc/en/guide/development/minigame-replay-format.md)。[replay.py](./replay.py) 提供格式校验和 v0 转换，供管理命令处理旧 JSON；不增加提交接口的校验或缓存负担。
+载荷及前端历史迁移规则见回放数据格式 v1 的[中文标准](../../../vitepress_doc/zh/guide/development/minigame-replay-format.md)及[英文标准](../../../vitepress_doc/en/guide/development/minigame-replay-format.md)。后端历史回放已完成压缩迁移，旧 `replay` JSONField、一次性迁移命令及其转换代码已移除。
+
+多指九榜开放提交，沿用相同的登录权限、最佳成绩更新和缓存逻辑。多指方向仅为本地显示设置，高级回放及事件坐标固定为 16×30，格式见上述标准；持久化沿用现有模型，无需结构迁移。
 
 每榜三个固定键，均无 TTL：
 
@@ -64,7 +67,7 @@
 - Redis 读取失败时整次请求降级：分类查询按排序列分页，再批量补全其他列；个人成绩批量读取，名次允许为 `null`。
 - 普通读取、提交及重建之间不保证快照一致性。缓存偏差可用重建命令恢复；Admin 提供只读查询与删除。
 
-运维索引：[缓存与内存统计](../../../vitepress_doc/zh/guide/development/cache.md)、[删除信号](../../../vitepress_doc/zh/guide/development/signals.md)、[管理命令](../../../vitepress_doc/zh/guide/development/management-commands.md)。14 榜共 42 个固定键，由 `MiniGameRankingCache.keys` 提供给监控，不扫描 keyspace。
+运维索引：[缓存与内存统计](../../../vitepress_doc/zh/guide/development/cache.md)、[删除信号](../../../vitepress_doc/zh/guide/development/signals.md)、[管理命令](../../../vitepress_doc/zh/guide/development/management-commands.md)。23 榜共 69 个固定键，由 `MiniGameRankingCache.keys` 提供给监控，不扫描 keyspace。
 
 ## 检查与维护
 
@@ -77,6 +80,6 @@
 .\.venv\Scripts\python.exe -m flake8 minigame saolei/api.py monitor/cache.py monitor/test_server_metrics.py
 ```
 
-迁移文件按项目约定由 Git 忽略，部署脚本 `start.sh` 自动执行 `makemigrations` 和 `migrate`。模型保留原名 `replay` 的 JSONField 并允许为空，新增 `replay_archive` BinaryField，自动生成迁移无需交互确认字段改名。结构迁移完成后先用 `manage.py migrate_minigame_replays --dry-run` 检查，再执行 `manage.py migrate_minigame_replays`，转换为 v1 并压缩。每条写入成功后清空对应旧 JSON；命令支持重复执行，损坏或未知版本数据保留并报告，不访问 Redis。缓存首次查询自动初始化，也可用 `manage.py rebuild_minigame_ranks [--ranking-key key]` 预热或恢复。
+迁移文件按项目约定由 Git 忽略，部署脚本 `start.sh` 自动执行 `makemigrations` 和 `migrate`。历史数据压缩迁移已完成，本次结构迁移仅删除旧 `replay` 列，保留 `replay_archive`、成绩及达成时间。缓存首次查询自动初始化，也可用 `manage.py rebuild_minigame_ranks [--ranking-key key]` 预热或恢复。
 
 网站地址、URL 查询参数及配色扩展接口见[排行榜开发说明](../../../front_end/src/views/RankingView/README.md)；前端检查与由用户执行的 Cypress 命令见[前端开发文档](../../../front_end/local-minigame/README.md#验证)。
