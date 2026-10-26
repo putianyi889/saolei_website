@@ -3,14 +3,14 @@
         <div class="website-replay-info__details">
             <div class="website-replay-info__identity website-replay-info__row">
                 <span class="website-replay-info__id">{{ t('local.videoId') }} #{{ id }}</span>
-                <time v-if="info" class="website-replay-info__upload-time" :datetime="info.video.upload_time" :title="t('common.prop.upload_time')">{{ utc_to_local_format(info.video.upload_time) }}</time>
+                <time v-if="info" class="website-replay-info__upload-time" :datetime="info.video.upload_time" :title="t('prop.upload_time')">{{ utc_to_local_format(info.video.upload_time) }}</time>
                 <span v-else>--</span>
             </div>
             <div class="website-replay-info__player website-replay-info__row">
                 <PlayerName v-if="info" :user-id="info.video.player" />
                 <span v-else>--</span>
                 <span v-if="info && info.tournament_ids.length > 0" class="website-replay-info__tournaments">
-                    {{ t('local.tournament') }}
+                    {{ t('tournament.tournament') }}
                     <RouterLink v-for="tournamentId in info.tournament_ids" :key="tournamentId" class="link" :to="`/tournament/${tournamentId}`">#{{ tournamentId }}</RouterLink>
                 </span>
             </div>
@@ -77,7 +77,7 @@ function rankingLabel(ranking: SiteReplayRanking): string {
     const label = ranking.ranking === 'saolei'
         ? t(ranking.stat.endsWith('t') ? 'local.saoleiTime' : 'local.saoleiBvs')
         : t(ranking.ranking === 'pb' ? 'local.pb' : 'local.pluck');
-    return ranking.nf ? `${label} (${t('common.nf')})` : label;
+    return ranking.nf ? `${label} (${t('nf')})` : label;
 }
 
 const i18nMessages = {
@@ -87,7 +87,6 @@ const i18nMessages = {
         downloadReplay: '下载录像文件',
         downloadOffline: '下载离线包',
         videoId: '录像 ID',
-        tournament: '比赛',
         loading: '正在加载网站信息…',
         loadFailed: '网站信息加载失败',
         unranked: '未入榜',
@@ -102,7 +101,6 @@ const i18nMessages = {
         downloadReplay: 'Download replay file',
         downloadOffline: 'Download offline package',
         videoId: 'Replay ID',
-        tournament: 'Tournament',
         loading: 'Loading website information…',
         loadFailed: 'Website information failed to load',
         unranked: 'Not ranked',

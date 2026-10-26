@@ -348,7 +348,7 @@ export function medalCaption(series: string, code: string, stage: number | null,
     const seriesName = medalSeriesLabel(series, locale);
     const stageName = medalStageLabel(series, stage);
     const levelCode = medalLevel(code);
-    const levelNames = chinese ? zhCn.common.level : en.common.level;
+    const levelNames = chinese ? zhCn.level : en.level;
     const level = levelCode ? levelNames[levelCode] : '';
     let title = seriesName;
     if (stageName) {
