@@ -105,6 +105,7 @@ export default defineConfig({
                                 { text: '录像表达式参考', link: '/zh/guide/replay-expressions' },
                                 { text: '扫雷标识', link: '/zh/guide/identifier' },
                                 { text: 'top 榜与 LSF 榜', link: '/zh/guide/top-lsf' },
+                                { text: '小游戏', link: '/zh/guide/minigames' },
                                 {
                                     text: '比赛功能',
                                     link: '/zh/guide/tournament',
@@ -134,6 +135,13 @@ export default defineConfig({
                                 { text: '数据爬取指南', link: '/zh/guide/development/data-crawling' },
                                 { text: 'GSC 历史录像补录', link: '/zh/guide/development/gsc-history-import' },
                                 { text: '后端管理命令', link: '/zh/guide/development/management-commands' },
+                                { text: '小游戏回放格式', link: '/zh/guide/development/minigame-replay-format' },
+                            ],
+                        },
+                        {
+                            text: '周边工具',
+                            items: [
+                                { text: '元神工具箱', link: '/zh/guide/tools/yuanshen-toolbox' },
                             ],
                         },
                     ],
@@ -174,6 +182,7 @@ export default defineConfig({
                                 { text: 'Replay Expressions', link: '/en/guide/replay-expressions' },
                                 { text: 'Player Identifiers', link: '/en/guide/identifier' },
                                 { text: 'top and LSF Rankings', link: '/en/guide/top-lsf' },
+                                { text: 'Minigames', link: '/en/guide/minigames' },
                                 {
                                     text: 'Tournaments',
                                     link: '/en/guide/tournament',
@@ -193,6 +202,12 @@ export default defineConfig({
                                 { text: 'Terminology', link: '/en/guide/minesweeper/terminology' },
                                 { text: 'Data', link: '/en/guide/minesweeper/stat' },
                                 { text: 'evf Format', link: '/en/guide/minesweeper/evf-standard' },
+                            ],
+                        },
+                        {
+                            text: 'Development',
+                            items: [
+                                { text: 'Minigame Replay Format', link: '/en/guide/development/minigame-replay-format' },
                             ],
                         },
                     ],

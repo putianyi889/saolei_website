@@ -5,6 +5,7 @@ import 'cypress-table';
 import 'cypress-intercept-formdata';
 import type { StaticResponse } from 'cypress/types/net-stubbing';
 
+import { getDatabase, USER_INFO_STORE_NAME } from '../../src/services/database';
 import type { LocalSettings } from '../../src/store';
 
 declare global {
@@ -161,6 +162,11 @@ Cypress.Commands.add('mockRegister', () => {
 Cypress.Commands.add('mockPlayerNameFallback', () => {
     cy.intercept('GET', '**/api/userprofile/avatar/**', { statusCode: 404 }).as('playerNameFallbackAvatar');
     cy.intercept('GET', '**/api/userprofile/infobulk*', { body: [] }).as('playerNameFallbackUserInfoBulk');
+    cy.then(async () => {
+        // Cached names bypass the mocked API and can leak across specs or repeated runs.
+        const db = await getDatabase();
+        await db.clear(USER_INFO_STORE_NAME);
+    });
 });
 
 Cypress.Commands.add('mockLogin', () => {
@@ -194,10 +200,13 @@ Cypress.Commands.add('mockLogin', () => {
 });
 
 Cypress.Commands.add('closeElNotifications', () => {
-    cy.get('.el-notification__closeBtn:visible').each(($el) => {
-        cy.wrap($el).click();
+    cy.document().then((doc) => {
+        // Close the stack together before its remaining buttons move during transitions.
+        doc.querySelectorAll<HTMLElement>('.el-notification__closeBtn').forEach((button) => {
+            button.click();
+        });
     });
-    cy.get('.el-notification__closeBtn:visible').should('not.exist');
+    cy.shouldBeAbsentOrHidden('.el-notification');
 });
 
 Cypress.Commands.add('shouldBeAbsentOrHidden', (selector, options) => {
