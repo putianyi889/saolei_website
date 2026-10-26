@@ -325,13 +325,13 @@ python manage.py db_worker_robust --queue-name default --interval 2
 
 位置：`monitor/management/commands/refresh_monitor_snapshot.py`
 
-立即采样录像、任务、磁盘和内存统计，原子发布 `BASE_DIR/runtime/monitor.json`，供 `GET /api/monitor/summary` 读取。首次部署或本地调试时可手动运行；日常更新由下方 APScheduler 任务执行。单项失败保留原样本及时间，其他项继续更新；具体结构见[服务器监控快照](./cache.md#服务器监控快照)。
+立即采样录像、任务、磁盘和内存统计，原子发布监控 JSON，供 `GET /api/monitor/summary` 读取。开发环境默认写入 `BASE_DIR/runtime/monitor.json`；生产环境默认写入与 `STATIC_ROOT` 同级的 `runtime/monitor.json`，可通过 `MONITOR_SNAPSHOT_PATH` 覆盖。首次部署或本地调试时可手动运行；日常更新由下方 APScheduler 任务执行。单项失败保留原样本及时间，其他项继续更新；具体结构见[服务器监控快照](./cache.md#服务器监控快照)。
 
 ```bash
 python manage.py refresh_monitor_snapshot
 ```
 
-生产环境需部署 `default.conf` 中的精确路径配置，并执行 `nginx -t` 和 reload。默认文件路径为 `/root/saolei/runtime/monitor.json`；更改部署目录时同步调整 Nginx alias。Nginx worker 需要读取文件及遍历父目录的权限。采样或写入失败时检查 `logs/apscheduler.log`；旧文件不会自动过期，应检查各项采样时间。
+生产环境需部署 `default.conf` 中的精确路径配置，并执行 `nginx -t` 和 reload。Nginx `alias` 应与采样实际输出路径一致；更改输出目录时同步调整配置。Nginx worker 需要读取文件及遍历父目录的权限。采样或写入失败时检查 `logs/apscheduler.log`；旧文件不会自动过期，应检查各项采样时间。
 
 ### `runapscheduler`
 

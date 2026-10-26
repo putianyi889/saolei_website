@@ -37,11 +37,13 @@ redis-cli -n 0 DEL io_s_old io_r_old io_s_spds io_r_spds cpus
 
 ## 服务器监控快照
 
-`GET /api/monitor/summary` 一次返回 `{videosummary, tasksummary, diskusage, memoryusage}`，前端服务器页面只请求一次，再分发给各张卡片。APScheduler 的 `refresh_monitor_snapshot` 启动时立即执行，此后每 5 分钟复用 `monitor/services.py` 的采集函数，写入 `BASE_DIR/runtime/monitor.json`。生产 Nginx 直接提供该文件；本地 Ninja 接口也只读文件，不在请求中采集。文件不存在时返回 503。
+`GET /api/monitor/summary` 一次返回 `{videosummary, tasksummary, diskusage, memoryusage}`，前端服务器页面只请求一次，再分发给各张卡片。APScheduler 的 `refresh_monitor_snapshot` 启动时立即执行，此后每 5 分钟复用 `monitor/services.py` 的采集函数，发布监控 JSON。开发环境默认写入 `BASE_DIR/runtime/monitor.json`；生产环境写入与 `STATIC_ROOT` 同级的 `runtime/monitor.json`，与源码目录分离。生产 Nginx 直接提供该文件；本地 Ninja 接口也只读文件，不在请求中采集。文件不存在时返回 503。
 
 前三项沿用原有统计字段，增加 UTC `sampled_at`；`memoryusage` 包含 `memory` 和 `redis`，各自保留采样时间。首次采集失败的统计项为 `null`；内存块仍使用下文的 `unavailable` 结构。后续某项采集失败时保留其上次成功结果及原时间，其他项正常更新。内存两块也独立保留旧样本。读取采样时间可以判断调度停止或持续失败导致的数据过期。
 
 发布前按 `monitor/schema.py` 校验，在同目录完整写入临时文件，再用 `os.replace` 原子替换，失败不破坏正式文件。Nginx 对精确路径设置 JSON 类型、`Cache-Control: no-cache` 和 `open_file_cache off`，避免替换后继续使用旧文件描述符；请求限流由 Nginx 执行。目录需可遍历，文件以 0644 权限发布，确保 Nginx worker 可读。部署路径变化时同步修改 `default.conf`；可通过 `MONITOR_SNAPSHOT_PATH` 覆盖采样与本地读取路径。
+
+采样与 Nginx 的 `alias` 必须指向同一文件。若只更新代码而未同步实际 Nginx 配置，或两者使用了不同路径，即使采样日志显示发布成功，请求仍可能返回 503。`start.sh` 会部署 `default.conf` 并重载 Nginx；手动部署时需同步配置，执行 `nginx -t` 检查通过后再重载。
 
 旧的四个独立监控接口和 Redis 结果缓存已移除，旧结果 key 会按原 300 秒 TTL 自动过期。管理员任务页使用独立的 `GET /api/common/tasks/summary`，仅管理员可访问，每次直接查询数据库，不读取快照；任务删除、重启和清理不触发整份监控数据重算。首次部署或本地调试可执行 [refresh_monitor_snapshot](./management-commands.md#refresh-monitor-snapshot) 手动生成文件，再重启 APScheduler、检查并重载 Nginx。
 
