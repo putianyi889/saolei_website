@@ -20,10 +20,10 @@
     <div class="section-body">
         <GitHubUser username="putianyi889" />
         <GitHubUser username="eee555" />
+        <GitHubUser username="Threeeee" />
         <GitHubUser username="ljzloser" />
         <GitHubUser username="hwatson381" />
         <GitHubUser username="hgraceb" />
-        <GitHubUser username="Threeeee" />
     </div>
     <div class="section-label">
         <strong>{{ t('local.localization') }}</strong>
