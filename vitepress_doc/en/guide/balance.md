@@ -41,7 +41,7 @@ description: Open Minesweeper donation income and server expense details, showin
 | Domain | ¥1.00 | 2023-12-11 | Huawei Cloud | fff666.top |
 | Server | ¥89.14 | 2023-12-03 | Huawei Cloud | East China-Shanghai 1, 2 vCPU, 2 GiB memory, 40 GiB system disk, 400 GB traffic package, 3 Mbit/s peak bandwidth |
 
-Current account balance: ¥261.18
+Current account balance: ¥461.18
 
 Resource expiration dates and next renewal amounts:
 
