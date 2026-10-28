@@ -6,6 +6,20 @@
 python manage.py <command> --help
 ```
 
+## 勋章补发
+
+### `enqueue_medal_backfill`
+
+位置：`medal/management/commands/enqueue_medal_backfill.py`
+
+给还没有 `MedalScan` 的玩家入队 `task_backfill_player_medals`。命令本身不扫描录像，也不写 Redis。任务优先级是 0，低于上传后的刷新。工人跑完现有 `evaluate_player` 后才写 `MedalScan` 和 `medal:state:{user_id}`；一枚都没有也写 `{"grants":[]}`。已经有 `MedalScan` 的玩家不会入队。同一玩家已经有一条 `READY` 的补发任务时不再插入第二条。
+
+打开勋章详情时的补发仍然保留，用来盖住命令还没排到的人。
+
+```bash
+python manage.py enqueue_medal_backfill
+```
+
 ## 小游戏排行榜
 
 `minigame/management/commands/rebuild_minigame_ranks.py` 从数据库最佳成绩重建 ZSET、明细 Hash 和初始化标记；空榜也初始化。不修改数据库，允许与提交并发时产生偶发偏差。
@@ -209,7 +223,11 @@ python manage.py refresh_videos --start 10000 --end 20000 --step 50
 
 位置：`msuser/management/commands/refresh_video_counts.py`
 
-刷新全部 `UserMS` 的录像总数及各级别、模式计数，不修改上传额度、个人纪录或 Redis。排除进行中的比赛录像及关联到任何比赛的录像（包括已结束比赛），其余录像不按审核状态筛选；没有普通录像的用户计数归零。执行期间暂停录像写入，避免计数覆盖。
+刷新全部 `UserMS` 的比赛、非比赛录像数量及文件空间：`video_num_total`、`video_num_tournament`、`video_size_total`、`video_size_tournament`。空间按 `VideoModel.file_size` 求和，单位为字节；合计字段 `video_num_all`、`video_size_all` 由数据库 `GeneratedField` 自动计算。不修改上传额度、个人纪录或 Redis。
+
+进行中的比赛录像及关联到任何比赛的录像（包括已结束比赛）计入比赛口径，其余计入非比赛口径；不按审核状态筛选。通过 `EXISTS` 检查比赛关联，避免同一录像关联多个比赛时重复累计；无录像的用户四个基础统计均归零，包括未关联个人资料的 `UserMS`。
+
+补录关联不立即调整统计，之后的删除、大小或归属修改按录像当前比赛归属增减，允许产生临时偏差，运行此命令统一修正。命令直接聚合当前录像，不维护历史分类标记，也不更新录像行；每批用户统计在同一事务内写入，失败回滚当前批，已完成批不回滚。迁移后先运行此命令回填新增统计。执行期间暂停录像、比赛关联及玩家归属等相关写入，避免统计覆盖。
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -285,7 +303,7 @@ python manage.py delete_newest_queue
 
 位置：`common/management/commands/db_worker_robust.py`
 
-启动 `django-tasks-db` worker，通过 pidfile 和进程检测避免重复启动。仅在未检测到现有 worker 时，将遗留的 `RUNNING` 任务标记为 `FAILED`，然后启动 worker；不会在运行期间自动恢复任务或重启进程。
+启动 `django-tasks-db` worker，通过 pidfile 和进程检测避免重复启动。本进程以及启动它的父进程不算另一个 worker。仅在未检测到现有 worker 时，将遗留的 `RUNNING` 任务标记为 `FAILED`，然后启动 worker；不会在运行期间自动恢复任务或重启进程。
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -307,13 +325,13 @@ python manage.py db_worker_robust --queue-name default --interval 2
 
 位置：`monitor/management/commands/refresh_monitor_snapshot.py`
 
-立即采样录像、任务、磁盘和内存统计，原子发布 `BASE_DIR/runtime/monitor.json`，供 `GET /api/monitor/summary` 读取。首次部署或本地调试时可手动运行；日常更新由下方 APScheduler 任务执行。单项失败保留原样本及时间，其他项继续更新；具体结构见[服务器监控快照](./cache.md#服务器监控快照)。
+立即采样录像、任务、磁盘和内存统计，原子发布监控 JSON，供 `GET /api/monitor/summary` 读取。开发环境默认写入 `BASE_DIR/runtime/monitor.json`；生产环境默认写入与 `STATIC_ROOT` 同级的 `runtime/monitor.json`，可通过 `MONITOR_SNAPSHOT_PATH` 覆盖。首次部署或本地调试时可手动运行；日常更新由下方 APScheduler 任务执行。单项失败保留原样本及时间，其他项继续更新；具体结构见[服务器监控快照](./cache.md#服务器监控快照)。
 
 ```bash
 python manage.py refresh_monitor_snapshot
 ```
 
-生产环境需部署 `default.conf` 中的精确路径配置，并执行 `nginx -t` 和 reload。默认文件路径为 `/root/saolei/runtime/monitor.json`；更改部署目录时同步调整 Nginx alias。Nginx worker 需要读取文件及遍历父目录的权限。采样或写入失败时检查 `logs/apscheduler.log`；旧文件不会自动过期，应检查各项采样时间。
+生产环境需部署 `default.conf` 中的精确路径配置，并执行 `nginx -t` 和 reload。Nginx `alias` 应与采样实际输出路径一致；更改输出目录时同步调整配置。Nginx worker 需要读取文件及遍历父目录的权限。采样或写入失败时检查 `logs/apscheduler.log`；旧文件不会自动过期，应检查各项采样时间。
 
 ### `runapscheduler`
 

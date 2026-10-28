@@ -13,7 +13,7 @@ export default defineConfig({
     defaultBrowser: 'chrome',
     e2e: {
         baseUrl: 'http://localhost:8080',
-        setupNodeEvents(on) {
+        setupNodeEvents(on, config) {
             on('before:browser:launch', (browser, launchOptions) => {
                 if (browser.name === 'chrome') {
                     launchOptions.args.push('--accept-lang=zh-CN');
@@ -23,10 +23,13 @@ export default defineConfig({
             on('file:preprocessor', vitePreprocessor({
                 configFile: path.resolve(__dirname, 'vite.config.ts'),
             }));
+            cypressSplit(on, config);
+            return config;
         },
     },
 
     component: {
+        specPattern: ['src/**/*.cy.{js,jsx,ts,tsx}', 'cypress/component/**/*.cy.{js,jsx,ts,tsx}'],
         setupNodeEvents(on, config) {
             cypressSplit(on, config);
             return config;

@@ -9,7 +9,6 @@ from django.utils import timezone
 
 from msuser.models import UserMS
 from userprofile.models import UserProfile
-from utils.exceptions import ExceptionToResponse
 from videomanager.models import ExpandVideoModel, VideoModel
 from videomanager.view_utils import generate_file_stream
 
@@ -159,23 +158,19 @@ class UserProfileUpdateApiTests(TestCase):
         self.client.force_login(self.user)
 
     def test_update_profile_keeps_error_when_name_censorship_fails(self):
-        with patch(
-            'userprofile.services.try_update_user_name_fields',
-            side_effect=ExceptionToResponse('censorship', 'unknown'),
-        ):
-            response = self.client.post(
-                '/api/userprofile/update_profile',
-                {'realname': 'Jason Weng'},
-            )
-
-        self.assertEqual(response.status_code, 200, response.content)
-        self.assertEqual(
-            response.json()['realname'],
-            {'type': 'error', 'object': 'censorship', 'category': 'unknown'},
-        )
-        self.user.refresh_from_db()
-        self.assertEqual(self.user.realname, '匿名')
-        self.assertFalse(self.user.has_realname())
+        for result, category in [(False, 'illegal'), (RuntimeError('verification unavailable'), 'unknown')]:
+            with self.subTest(category=category), patch('userprofile.services.verify_text') as verify:
+                if isinstance(result, Exception):
+                    verify.side_effect = result
+                else:
+                    verify.return_value = result
+                response = self.client.post('/api/userprofile/update_profile', {'realname': 'Jason Weng'})
+                verify.assert_called_once()
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(response.json()['realname'], {'type': 'error', 'object': 'censorship', 'category': category})
+            self.user.refresh_from_db()
+            self.assertEqual(self.user.realname, '匿名')
+            self.assertFalse(self.user.has_realname())
 
 
 @override_settings(RATELIMIT_ENABLE=False)
@@ -190,6 +185,29 @@ class RealnamePrivacyTests(TestCase):
 
     def privacy(self, hide):
         return self.client.post('/api/userprofile/update_profile', {'hide_realname': hide})
+
+    def test_privacy_only_save_updates_marker_and_admin_state(self):
+        previous = timezone.now() - timedelta(days=1)
+        UserProfile.objects.filter(pk=self.user.pk).update(hide_realname=False, date_updated=previous)
+        self.client.force_login(self.user)
+        response = self.privacy(True)
+        self.assertEqual(response.json()['hide_realname'], {'type': 'success'})
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.hide_realname)
+        self.assertGreater(self.user.date_updated, previous)
+        updated = self.client.get('/api/userprofile/infoupdated', {'since': int(previous.timestamp() * 1000)})
+        self.assertIn(self.user.pk, updated.json())
+        self.client.force_login(self.staff)
+        self.assertTrue(self.client.get(f'/api/userprofile/admin/detail/{self.user.pk}').json()['hide_realname'])
+
+    def test_rate_limited_privacy_save_does_not_change_saved_setting(self):
+        UserProfile.objects.filter(pk=self.user.pk).update(hide_realname=False)
+        self.client.force_login(self.user)
+        with patch('django_ratelimit.decorators.is_ratelimited', return_value=True):
+            response = self.privacy(True)
+        self.assertEqual(response.status_code, 429)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.hide_realname)
 
     def test_public_and_private_names_have_distinct_contracts(self):
         for viewer in (None, self.user, self.staff):

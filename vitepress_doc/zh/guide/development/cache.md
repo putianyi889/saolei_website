@@ -11,6 +11,22 @@ description: 开源扫雷网Redis/Django缓存结构详解，包括录像队列�
 
 旧竞速排行榜及新闻的读写逻辑已移除，可运行`python manage.py delete_legacy_speedranking_cache`清理旧个人纪录hash、排行zset及`news_queue`。支持`--dry-run`预览，具体范围见[管理命令文档](./management-commands.md#delete-legacy-speedranking-cache)。
 
+`UserMS` 的录像数量及文件空间保存在数据库，不按级别、模式或 NF 分类，也不涉及 Redis 清理。创建时按 `ongoing_tournament` 归类；全量重算时，`ongoing_tournament=True` 或关联到任意比赛的录像属于比赛口径，包括已公开、已结束比赛的录像。同一录像关联多个比赛只计算一次。空间按 `VideoModel.file_size` 求和，单位为字节。
+
+| 口径 | 数量字段 | 文件空间字段 |
+| --- | --- | --- |
+| 非比赛录像 | `video_num_total` | `video_size_total` |
+| 比赛录像 | `video_num_tournament` | `video_size_tournament` |
+| 全部录像 | `video_num_all` | `video_size_all` |
+
+两个 `*_all` 字段均为持久化 `GeneratedField`，由数据库计算比赛与非比赛口径之和，不直接写入。上传额度 `video_num_limit` 独立维护，额度检查继续使用非比赛数量 `video_num_total`。
+
+用户数据库页 `/database/users` 通过 `GET /api/userprofile/query` 直接读库，不使用用户资料 IndexedDB 缓存：录像统计变化不会更新 `UserProfile.date_updated`。查询集中在 `common.services`，每个非空页执行计数、用户及统计、当前页已验证关联 ID 三次查询。`AccountLinkQueue(platform, identifier)` 联合索引用于平台 ID 精确查询，用户外键索引用于分页后的批量读取。接口用法见仓库 `back_end/saolei/userprofile/README.md`。
+
+补录逻辑及延迟重算行为保持不变：比赛关联变化不立即调整统计。删除、文件大小及玩家归属变更按该录像当前的比赛标记和关联归类，允许与原先计入的口径存在偏差，统一由 [refresh_video_counts](./management-commands.md#refresh-video-counts) 全量重算修复；不保存历史统计分类字段。迁移后需先运行重算命令补齐历史统计。
+
+保存信号中数量、文件空间及需要提升的上传额度合并到一次 `UserMS UPDATE`；归属变化通过一条 `CASE WHEN UPDATE` 同时处理两位玩家。后台压缩修改 `file_size` 时，只查询该录像是否属于比赛，再按大小差额更新对应口径，不重算该用户的全部录像。所有统计字段使用固定字段名与 `if/else` 分支，不动态拼接。
+
 旧 World 监控页面及其 CPU/网络 IO 采集已移除，不再读写历史采样；旧 `/monitor/io_cpus/` 和 `/monitor/capacity/` 不恢复。部署并停止旧采集进程后，可按固定名称清理 `saolei_website` Redis DB 中的五个遗留 key，无需遍历其他 key：
 
 ```bash
@@ -21,11 +37,13 @@ redis-cli -n 0 DEL io_s_old io_r_old io_s_spds io_r_spds cpus
 
 ## 服务器监控快照
 
-`GET /api/monitor/summary` 一次返回 `{videosummary, tasksummary, diskusage, memoryusage}`，前端服务器页面只请求一次，再分发给各张卡片。APScheduler 的 `refresh_monitor_snapshot` 启动时立即执行，此后每 5 分钟复用 `monitor/services.py` 的采集函数，写入 `BASE_DIR/runtime/monitor.json`。生产 Nginx 直接提供该文件；本地 Ninja 接口也只读文件，不在请求中采集。文件不存在时返回 503。
+`GET /api/monitor/summary` 一次返回 `{videosummary, tasksummary, diskusage, memoryusage}`，前端服务器页面只请求一次，再分发给各张卡片。APScheduler 的 `refresh_monitor_snapshot` 启动时立即执行，此后每 5 分钟复用 `monitor/services.py` 的采集函数，发布监控 JSON。开发环境默认写入 `BASE_DIR/runtime/monitor.json`；生产环境写入与 `STATIC_ROOT` 同级的 `runtime/monitor.json`，与源码目录分离。生产 Nginx 直接提供该文件；本地 Ninja 接口也只读文件，不在请求中采集。文件不存在时返回 503。
 
 前三项沿用原有统计字段，增加 UTC `sampled_at`；`memoryusage` 包含 `memory` 和 `redis`，各自保留采样时间。首次采集失败的统计项为 `null`；内存块仍使用下文的 `unavailable` 结构。后续某项采集失败时保留其上次成功结果及原时间，其他项正常更新。内存两块也独立保留旧样本。读取采样时间可以判断调度停止或持续失败导致的数据过期。
 
 发布前按 `monitor/schema.py` 校验，在同目录完整写入临时文件，再用 `os.replace` 原子替换，失败不破坏正式文件。Nginx 对精确路径设置 JSON 类型、`Cache-Control: no-cache` 和 `open_file_cache off`，避免替换后继续使用旧文件描述符；请求限流由 Nginx 执行。目录需可遍历，文件以 0644 权限发布，确保 Nginx worker 可读。部署路径变化时同步修改 `default.conf`；可通过 `MONITOR_SNAPSHOT_PATH` 覆盖采样与本地读取路径。
+
+采样与 Nginx 的 `alias` 必须指向同一文件。若只更新代码而未同步实际 Nginx 配置，或两者使用了不同路径，即使采样日志显示发布成功，请求仍可能返回 503。`start.sh` 会部署 `default.conf` 并重载 Nginx；手动部署时需同步配置，执行 `nginx -t` 检查通过后再重载。
 
 旧的四个独立监控接口和 Redis 结果缓存已移除，旧结果 key 会按原 300 秒 TTL 自动过期。管理员任务页使用独立的 `GET /api/common/tasks/summary`，仅管理员可访问，每次直接查询数据库，不读取快照；任务删除、重启和清理不触发整份监控数据重算。首次部署或本地调试可执行 [refresh_monitor_snapshot](./management-commands.md#refresh-monitor-snapshot) 手动生成文件，再重启 APScheduler、检查并重载 Nginx。
 
@@ -54,13 +72,15 @@ Redis 分类只读取业务代码直接确定的 DB 0 key，不执行 `SCAN`、`
 
 分类请求一次返回左键或多指 9 列、标双 2 列或漏雷 3 列，以组内任一列排序。已初始化时用两轮 pipeline 读取标记、人数、页内玩家和全部列明细，不查询成绩表。空榜也保存初始化标记；单条上传不设置标记。未初始化时从数据库加载完整榜单；Redis 故障时整次请求批量回源数据库。
 
+小游戏页排行榜抽屉仅读取所选配置的首页 20 人及登录用户位置，复用上述键，不初始化同组其他榜单或增加缓存键。含个人位置的响应禁止共享缓存，接口详情见后端 README。
+
 成绩创建或严格改善后通过 `on_commit` 写 ZSET 和 Hash，删除后移除成员并保留初始化标记。接受并发和重建的偶发覆盖；运行 `manage.py rebuild_minigame_ranks [--ranking-key key]` 可恢复缓存，不改数据库成绩。完整接口与取舍见 `back_end/saolei/minigame/README.md`。
 
 最佳成绩对应的 v1 JSON 回放压缩为 7z，仅保存在 `MiniGameBestScore.replay_archive` BinaryField，不进入 Redis。缓存重建和排行榜数据库回源用 `defer('replay_archive')` 排除二进制回放字段。
 
 ### 用户姓名与隐私
 
-前端 `user-info` 的姓名列直接兼容隐藏标记 `hidden`，无需清空缓存或调整版本与检查间隔。资格及隐藏状态变更更新 `date_updated`，现有 `infoupdated` 流程按正常周期更新对应记录，允许旧姓名延迟变化。Redis 排行继续只引用用户 ID。缓存流程见仓库 `front_end/src/services/userService.md`；授权、展示与迁移约定见 `back_end/saolei/userprofile/README.md`。
+前端 `user-info` 的姓名列直接兼容隐藏标记 `hidden`，无需调整数据库版本或检查间隔。资料保存成功后，`invalidateUserInfo(id)` 删除该用户的本地缓存并通知已挂载的 `PlayerName` 重新读取公开姓名；失效前发出的响应不会写回旧值。缓存删除失败时不影响已保存的设置，跳过该用户的旧缓存并重置检查时间以便重试。资格及隐藏状态变更更新 `date_updated`，其他浏览器仍由现有 `infoupdated` 流程按正常周期更新。Redis 排行继续只引用用户 ID。缓存流程见仓库 `front_end/src/services/userService.md`；授权、展示与迁移约定见 `back_end/saolei/userprofile/README.md`。
 
 独立的本地初始化脚本 `dangerzone/init_local_test.py` 会清空本地 `saolei_website` Redis 数据库（包含会话），然后根据导入的公开录像重建竞速榜（扫雷网普通/NF、PB 普通/NF、top 十八项及锚点）、效率 Thrp 榜、pluck 纪录缓存和录像状态队列。在 `back_end/saolei` 目录使用 `python -m dangerzone.init_local_test` 启动。只允许本地测试配置，并拒绝存在 `.production` 标记的环境；不注册 `import_public_data` 管理命令。详情及数据缺失限制见[本地公开数据快照](./management-commands.md#本地公开数据快照)。
 
@@ -233,7 +253,6 @@ digraph cache {
         refresh_state_queue_on_video_save [label="refresh_state_queue_on_video_save"];
         delete_video_expansion [label="delete_video_expansion"];
         update_video_count_on_video_save [label="update_video_count_on_video_save"];
-        update_video_count_limit_on_video_save [label="update_video_count_limit_on_video_save"];
         update_video_count_on_video_delete [label="update_video_count_on_video_delete"];
         refresh_custom_pluck_rank_on_video_save [label="refresh_custom_pluck_rank_on_video_save"];
         refresh_custom_pluck_rank_on_video_delete [label="refresh_custom_pluck_rank_on_video_delete"];
@@ -505,14 +524,10 @@ digraph cache {
 
     // msuser signals
     video_db -> update_video_count_on_video_save [label="post_save"];
+    tournament_db -> update_video_count_on_video_save [label="membership read on size/owner change"];
     userprofile_db -> update_video_count_on_video_save [label="FK read"];
     userms_db -> update_video_count_on_video_save [label="O2O read"];
-    update_video_count_on_video_save -> userms_db [label="write"];
-
-    video_db -> update_video_count_limit_on_video_save [label="post_save"];
-    userprofile_db -> update_video_count_limit_on_video_save [label="FK read"];
-    userms_db -> update_video_count_limit_on_video_save [label="O2O read"];
-    update_video_count_limit_on_video_save -> userms_db [label="write"];
+    update_video_count_on_video_save -> userms_db [label="one UPDATE: statistics + limit"];
 
     video_db -> update_video_count_on_video_delete [label="pre_delete"];
     tournament_db -> update_video_count_on_video_delete [label="m2m exists"];
@@ -648,6 +663,8 @@ GSC 历史补录不新增缓存，管理接口不画入公共 API 图。创建�
 
 participant 删除时，`revoke_rank_score_on_participant_delete` 在删除事务内锁定并更新 TournamentUser，提交后仅刷新受影响的积分 zset；扣至 0 的成员移除，年度锚点不变。数据库回滚时不发布撤分缓存。衰减及分类扣分规则见[信号触发关系](./signals.md#signal-function-map)。
 
+比赛批量公开 `reveal_videos_for_tournament` 先在事务内更新录像公开标记，提交后才按本批固定录像 ID 更新最新队列、竞速榜、custom pluck 纪录及其 Redis 缓存、效率榜。每项更新使用独立的 `transaction.on_commit(..., robust=True)` 回调；事务回滚不发布缓存，提交后的单项失败由 Django 记录错误日志，不撤销公开状态，也不阻断其他缓存或勋章入队回调。勋章批量入队回调同样隔离异常，缓存更新不依赖入队成功。目前不自动重试失败的回调，相关缓存或勋章任务需通过现有重建、重算入口恢复。
+
 当前积分 zset 使用固定年度锚点。`update_tournament_users` 读取缓存锚点，仅换算本批用户，不再根据用户 `last_updated` 推进基准或整体衰减其他成员。空缓存首次写入时初始化为当年 1 月 1 日 00:00 UTC。折算使用 `tournament_score_decay_factor(last_updated, 锚点)`，负时间差通过负指数自动兼容；因此年内新积分折算到年初时会放大，但所有成员共用锚点，排序等价于实时积分。锚点读取和本批写入使用 redis-py `transaction`（`WATCH` / `MULTI` / `EXEC`），年度更新并发发生时重试。数据库仍保留用户各自的 `score_current` / `last_updated`，API 回表输出这些原始值，前端按 `globalNow` 衰减显示；统一锚点只影响 Redis 排序。更新其他 total / best 字段不会改变当前积分基准。
 
 `common.apscheduler.refresh_tournament_score_reference` 在每年 1 月 1 日 00:00 UTC 调用 `TournamentCache.refresh_tournament_score_reference`，使用 `ZUNIONSTORE` 权重将当前积分 zset 整体折算到新锚点，并在同一 Redis 事务中设置锚点；其他排行和数据库不变。同一年重复执行无副作用。调度器启动时也执行一次，补齐跨年停机；尚未补齐时，结算仍沿用旧锚点，不会混用年份。读取旧锚点、整体折算及设置新锚点采用 `WATCH` / `MULTI` / `EXEC`，与结算写入并发时保持一致。
@@ -660,6 +677,51 @@ participant 删除时，`revoke_rank_score_on_participant_delete` 在删除事�
 
 `GSCParticipant.t37` 是数据库持久化 generated field，并建立 `gsc_t37_idx` 索引，服务于 GSC 排名和历史最好成绩查询。保存信号使用当前 participant 实例上的临时 `t37` 值进行 best 增量比较，因此不会为了读取 generated field 再查询一次 participant。
 
+## 勋章图鉴
+
+`medal/cache.py` 把已启用的成就定义放在 Django `default` 缓存，逻辑 key 为 `medal:catalog:v3`，TTL 300 秒。内容是定义字典，不含玩家是否解锁。先检查缓存，命中时不再查询默认定义是否缺失；未命中才补齐并装回图鉴。定义保存或删除时删掉这个 key。
+
+玩家摘要持久化到MySQL的`medal_playermedalsummary`，每名玩家一行，以玩家ID为主键。JSON只含有效授予的公开事实、进度数值、佩戴顺序和首次扫描状态；定义、隐藏条件和计分读取当前共享图鉴。图鉴缓存命中、摘要已建立时，`player_summary()`通过连接玩家表和摘要表的1次查询返回结果。此计数不包含认证、会话、Redis访问和中间件。
+
+后台评估、单项授予、人工决定和佩戴服务在同一玩家锁、同一数据库事务中更新业务记录和摘要；内容相同时不改写摘要。首次读取旧玩家时从现有勋章表补齐，不扫描录像。录像或比赛参加记录删除前，在同一玩家锁和删除事务内移除关联摘要。事务提交后再删掉该玩家的 `medal:display:v4:{user_id}`；删除回滚时摘要和键都还在。下次读取从完成外键置空的记录补齐摘要。维护原始勋章表的脚本必须使用服务入口，或在相同玩家锁和事务中删除受影响摘要；现有管理员重算入口也会同步重建摘要。
+
+录像补传或上传时间修改触发的刷新，在发布摘要前校正授予日期、证据和阶段日志；摘要仍在同一事务更新，状态键在提交后按数据库中的新日期重建。已有勋章也会处理时间变化，不要求成绩改善或档位变化。新手集合及三阶勋章记录完整分项证据，任一分项改时都可以重算完成时间。
+
+前端侧栏与勋章页通过共享服务复用按玩家保存的摘要和进行中的请求。首次扫描未完成时有限轮询；切换玩家或停用页面时取消该组件订阅，旧请求不得覆盖新玩家。保存佩戴后使相关摘要失效并通知活跃订阅者刷新。名字悬停另读 `medal:display:v4:{user_id}`；浏览器里的悬停缓存只活在当前页面会话。
+
+普通录像上传成功后，同一浏览器启动一条共享的有限状态检查。每次等待间隔依次为 1、2、3、5、8、13、20、30 秒，最多 8 次；连续上传合并，不重置次数，慢请求不并发。`GET /api/medal/refresh-status` 只允许登录用户查询本人，使用一次 EXISTS 检查刷新和补发任务是否 READY/RUNNING，不返回任务参数、不入队、不查询录像。每次状态请求超时 5 秒；请求失败或次数耗尽后停止，下一次成功上传可以重新启动。后台队列停止或延迟超过等待上限时，不保证本轮自动同步。
+
+任务不再待执行时，前端使对应玩家的摘要失效，活跃勋章页和佩戴栏共享一次新摘要请求；同时清除名字悬停缓存。已经打开过提示的名字会重新读取，其余名字留到下次显示。上传前仍在进行的旧请求不得写回缓存。没有活跃摘要订阅者时只使摘要失效，下次进入再读取。Redis 展示键仍由后台任务提交后更新，前端不重复计算或强制重建 Redis。该通知只影响发起上传的浏览器页面，其他浏览器没有推送。
+
+管理员人工决定保存在 `medal_medaloverride`，操作记录追加到 `medal_medaloverridelog`。撤销规则只保存在数据库；展示缓存移除被撤销的授予，不保存锁定标记或理由。管理页提交后使同一浏览器内目标玩家的摘要失效，其他玩家缓存不变。恢复自动需要后台任务完成后重新加载；其他浏览器已打开的页面不会收到推送。详细优先规则见 [管理员勋章决定](./medal-overrides.md)。
+
+## 勋章状态
+
+勋章系列、类型、方向、玩法使用 `config.text_choices.Medal_TextChoices` 的短码，前端对应 `utils/medal_const.ts`；名称、说明和寄语以枚举值直接查找前端翻译字典，图片目录和勋章 code 不变。系列值最长 2 字符，其他上述枚举值为单字符。枚举成员直接引用，不在 `medal/utils.py` 另设同值别名。
+
+逻辑 key 为 `medal:display:v4:{user_id}`，TTL 300 秒，只服务 `GET /api/medal/players/state` 展示。Redis 不保存计算状态；原始股东的最小录像 ID、未完成的新手难度和模式集合、能力自然档位、人工覆盖均从本次已读取的数据库状态取得。是否完成初始化只看 `MedalScan`，缺键或 Redis 故障不会触发全量评估。
+
+值只含玩家佩戴的已授予短记录，顺序与佩戴列表一致，时间为 Unix 秒。没佩戴时为 `{"grants":[]}`：
+
+```json
+{"grants":[{"code":"ability.time.b","stage":20000,"timestamp":1761123456,"scope":"","tournament":null,"rank":null}]}
+```
+
+- `code` 为定义，`stage` 为当前档，`timestamp` 为 `granted_at`。
+- `scope` 为 `scope_key`，普通勋章为空；`tournament`、`rank` 来自赛事授予。
+- 不保存 `value`、`levels`、`modes`、`locked`、录像 ID、阈值、分数或人工理由。未入档和已撤销的条目不写入。
+- 扫描后一枚都没有时可以缓存 `{"grants":[]}`；未扫描的玩家不建展示键。
+
+后台计算一次加载有效定义、玩家进度、全部授予和人工覆盖。普通录像按主键批量读取，与数据库自然档位及新手集合比较。同档从 48 秒提升到 46 秒不改授予证据；补传更早录像或修改时间仍按需校正发放日期、证据和阶段日志。证据失效只重算受影响难度；首次扫描、显式完整刷新和既有批量变更入口仍完整评估该玩家。旧数据库进度缺少集合时查询一次历史补齐。
+
+摘要在业务事务内更新。佩戴列表、其中的公开短记录或扫描状态变化才注册提交后发布；内部集合变化或结果完全不变均不发布。发布时重新取得同一玩家锁，连接读取最新摘要，在持锁期间批量写 Redis；旧提交回调和缓存回填也遵守此锁，防止旧快照覆盖新结果。业务回滚不发布。证据删除提交后删键，下次刷新仍根据 `MedalScan` 走增量。
+
+状态接口先批量读 Redis。缺失的 ID 一起在玩家锁内读取摘要：摘要齐全时 1 次 SELECT，部分摘要缺失时再用 1 次批量授予查询补齐展示；不查询历史录像。未扫描或不存在的玩家返回空列表，不在此接口启动扫描，首次补发仍由详情接口和 [enqueue_medal_backfill](./management-commands.md#enqueue-medal-backfill) 入队。命中缓存时没有业务 SQL。
+
+Redis 连接和读写异常记录日志，计算及数据库摘要不回滚，状态接口返回数据库结果。发布失败时尝试删除旧值，下次请求重新回填；如果 Redis 连删除也不可用，旧值最多保留到剩余 TTL 到期。这里的重试依赖下一次缓存未命中的读取，没有新增独立发布队列。
+
+当前浏览器标签页内，管理员授予、撤销或恢复自动的请求成功后，以及保存佩戴或上传同步完成后，共用 `refreshPlayerMedals` 使目标玩家的摘要和名字悬停缓存一起失效。已打开的悬停提示通过版本通知重新批量读取，未打开的留到下次悬停；失败的管理请求不清缓存，也不新增定时轮询。
+
 ## 写入与重建入口
 
 | 缓存 | 主要写入入口 | 重建 / 清理入口 |
@@ -671,6 +733,8 @@ participant 删除时，`revoke_rank_score_on_participant_delete` 在删除事�
 | NORMAL 参赛关系 | `TournamentCache.update_participant` / `remove_participant` | `manage.py rebuild_tournament_cache` 按 `user_id` 分组重建。 |
 | 比赛积分排行 | `TournamentCache.update_tournament_user` / `update_tournament_users`；APScheduler 年度锚点更新 | `manage.py rebuild_tournament_user_cache` 重建全部 7 个 zset；`manage.py rebuild_tournament_current_score_cache` 原子重算当前积分 zset 和年度锚点。 |
 | common 摘要 | 对应 API 内部 `cache.set` | TTL 到期自动失效。 |
+| 勋章图鉴 | `medal.signals.invalidate_medal_catalog` | 定义保存或删除后删除 `medal:catalog:v3`。没有单独的重建命令，下次读取从 `MedalDefinition` 装回。 |
+| 勋章状态 | 佩戴列表、佩戴中的公开授予或扫描状态改变后，提交时读取最新摘要写 `medal:display:v4:{user_id}` | 缺键按需批量回填展示，不扫描录像；摘要删除提交后删键。`manage.py enqueue_medal_backfill` 只给未扫描玩家入队首次评估。 |
 | 文章目录 | `article.views.update_list` | 管理员手动调用 `update_list` 全量刷新。 |
 
 ## 读取约定

@@ -27,6 +27,12 @@ export interface MinigameRankingRow {
     records: Record<string, MinigameScore | null>;
 }
 
+export interface MinigameRankingSummary {
+    count: number;
+    players: MinigameRankingRow[];
+    player: { player_id: number; records: Record<string, (MinigameScore & { rank: number | null }) | null> } | null;
+}
+
 export interface MinigameRankingGroup {
     game: TrainingGame;
     rankings: MinigameRanking[];
@@ -48,6 +54,18 @@ export function fetchMinigameRankings(): Promise<MinigameRankingGroup[]> {
 export async function fetchMinigameRanking(game: TrainingGame, sort: string, start: number, end: number): Promise<{ count: number; players: MinigameRankingRow[] }> {
     const { data } = await $axios.get<{ count: number; players: MinigameRankingRow[] }>(`/api/minigame/${game}/rank`, { params: { sort, start, end } });
     return data;
+}
+
+export async function fetchMinigameRankingSummary(rankingKey: string, signal?: AbortSignal): Promise<MinigameRankingSummary> {
+    const { data } = await $axios.get<MinigameRankingSummary>(`/api/minigame/${rankingKey}/summary`, { signal });
+    return data;
+}
+
+export async function fetchMinigameReplay(game: TrainingGame, key: string, player: number, signal?: AbortSignal): Promise<{ archive: ArrayBuffer; scoreMs: number }> {
+    const { data, headers } = await $axios.get<ArrayBuffer>(`/api/minigame/${game}/replay`, { params: { player, key }, responseType: 'arraybuffer', signal });
+    const scoreMs = Number(headers['x-minigame-score']);
+    if (!Number.isSafeInteger(scoreMs) || scoreMs <= 0) throw new Error('Missing minigame replay score');
+    return { archive: data, scoreMs };
 }
 
 export async function submitMinigameScore(rankingKey: string, score: number, replay: MinigameReplayData): Promise<{ improved: boolean; record: MinigameScore & { id: number; ranking_key: string; player_id: number } }> {

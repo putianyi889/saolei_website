@@ -15,8 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e:
+  e2e-tests:
+    name: Cypress E2E (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     services:
       mysql:
         image: mysql:8.4
@@ -67,8 +72,34 @@ jobs:
           E2E_TEST=True python manage.py runserver 127.0.0.1:8000 --noreload > backend.log 2>&1 &
           echo "Backend started in background"
 
-      - name: Install Chinese fonts
-        run: sudo apt-get install -y fonts-wqy-zenhei fonts-noto-cjk
+      - name: Cache Chinese fonts
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/fonts/noto-cjk-sc
+          key: ${{ runner.os }}-noto-cjk-sc-2.004-v1
+
+      # E2E uses Chinese. Keep regular/bold Noto Sans CJK SC without apt mirror downloads.
+      - name: Install and verify Chinese fonts
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          font_dir="$HOME/.local/share/fonts/noto-cjk-sc"
+          mkdir -p "$font_dir"
+          for weight in Regular Bold; do
+            font_file="$font_dir/NotoSansCJKsc-$weight.otf"
+            if [ ! -s "$font_file" ]; then
+              curl --fail --location --silent --show-error --retry 2 --connect-timeout 10 --max-time 60 \
+                "https://raw.githubusercontent.com/notofonts/noto-cjk/523d033d6cb47f4a80c58a35753646f5c3608a78/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-$weight.otf" \
+                --output "$font_file"
+            fi
+          done
+          cd "$font_dir"
+          sha256sum --check <<'SHA256'
+          2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b  NotoSansCJKsc-Regular.otf
+          b5f0d1a190a7f9b43c310a8850630af12553df32c4c050543f9059732d9b4c0a  NotoSansCJKsc-Bold.otf
+          SHA256
+          fc-cache -f "$font_dir"
+          fc-list ':lang=zh-cn' family | grep -F 'Noto Sans CJK SC'
 
       # The action installs dependencies once with npm ci and caches npm/Cypress.
       # Start Vite directly to skip predev's offline-package builds.
@@ -79,12 +110,16 @@ jobs:
           working-directory: front_end
           browser: chrome
           wait-on: 'http://localhost:8000,http://localhost:8080'
+        env:
+          SPLIT: ${{ strategy.job-total }}
+          SPLIT_INDEX: ${{ strategy.job-index }}
+          SPLIT_RANDOM_SEED: '43'
 
       - name: Upload Cypress screenshots
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: cypress-screenshots
+          name: cypress-screenshots-${{ matrix.shard }}
           path: front_end/cypress/screenshots
           if-no-files-found: ignore
           
@@ -92,8 +127,19 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: backend-logs
+          name: backend-logs-${{ matrix.shard }}
           path: |
             back_end/saolei/backend.log
             back_end/saolei/logs
           if-no-files-found: ignore
+
+  # Keep the existing check name for branch protection; both shards must pass.
+  e2e:
+    needs: e2e-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all E2E shards
+        env:
+          SHARD_RESULT: ${{ needs.e2e-tests.result }}
+        run: test "$SHARD_RESULT" = success

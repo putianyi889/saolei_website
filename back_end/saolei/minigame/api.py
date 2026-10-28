@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from django.http import HttpResponse
+from django.views.decorators.cache import never_cache
 from django_ratelimit.decorators import ratelimit
 from ninja import Form, Router, Schema
 from ninja.decorators import decorate_view
@@ -9,7 +11,7 @@ from pydantic import Json
 from userprofile.decorators import banned_blocked, login_required_error
 from userprofile.models import UserProfile
 from .models import MiniGameBestScore
-from .services import get_player_scores, get_ranking, submit_score
+from .services import get_player_scores, get_ranking, get_ranking_summary, get_replay, submit_score
 from .utils import GAME_RANKINGS, MiniGameError, ranking_definitions, RANKINGS
 
 router = Router()
@@ -46,6 +48,10 @@ class PlayerOut(Schema):
     records: dict[str, RankedScoreOut | None]
 
 
+class RankingSummaryOut(RankingOut):
+    player: PlayerOut | None
+
+
 def require_game(game):
     if game not in GAME_RANKINGS:
         raise MiniGameError(404, 'unknown_game', 'Unknown game')
@@ -65,6 +71,17 @@ def get_rankings(request):
     return ranking_definitions()
 
 
+@router.get('/{ranking_key}/summary', response=RankingSummaryOut)
+@decorate_view(never_cache, ratelimit(group='minigame.summary', key='ip', rate='5/s'))
+def ranking_summary(request, ranking_key: str):
+    """
+    - never_cache
+    - ratelimit(group='minigame.summary', key='ip', rate='5/s')
+    """
+    require_ranking(ranking_key)
+    return get_ranking_summary(ranking_key, request.user.pk if request.user.is_authenticated else None)
+
+
 # decorate_view 的最后一个参数最先执行：先检查登录，再读取封禁状态。
 @router.post('/{ranking_key}/score', response=SubmissionOut)
 @decorate_view(ratelimit(group='minigame.submit.user', key='user', rate='60/m'), banned_blocked, login_required_error)
@@ -76,6 +93,24 @@ def post_score(request, ranking_key: str, score: Form[int], replay: Form[Json[di
     """
     require_ranking(ranking_key)
     return submit_score(request.user, ranking_key, score, replay)
+
+
+@router.get('/{game}/replay')
+@decorate_view(ratelimit(group='minigame.replay', key='ip', rate='5/s'))
+def player_replay(request, game: str, player: int, key: str):
+    """
+    - ratelimit(group='minigame.replay', key='ip', rate='5/s')
+    """
+    require_game(game)
+    ranking_key = f'{game}-{key}'
+    require_ranking(ranking_key)
+    score, archive = get_replay(ranking_key, player)
+    return HttpResponse(archive, content_type='application/x-7z-compressed', headers={
+        # The stored 7z is already compressed; skip GZipMiddleware.
+        'Content-Encoding': 'identity', 'Content-Length': str(len(archive)),
+        'Cache-Control': 'no-transform', 'X-Minigame-Score': str(score),
+        'Access-Control-Expose-Headers': 'X-Minigame-Score',
+    })
 
 
 @router.get('/{game}/rank', response=RankingOut)

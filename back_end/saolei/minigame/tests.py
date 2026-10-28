@@ -15,7 +15,7 @@ from userprofile.models import UserProfile
 from .archive import pack_replay, unpack_replay
 from .cache import MiniGameRankingCache
 from .models import MiniGameBestScore
-from .services import get_player_scores, get_ranking, submit_score
+from .services import get_player_scores, get_ranking, get_ranking_summary, submit_score
 from .utils import GAME_RANKINGS, RANKINGS
 
 
@@ -131,6 +131,36 @@ class MiniGameRankingTests(TestCase):
             self.assertEqual(response.status_code, 200, response.content)
             self.assertEqual(unpack_replay(MiniGameBestScore.objects.get(player=self.player, ranking_key=ranking_key).replay_archive), replay)
 
+    def test_public_replay_returns_stored_7z_without_gzip_or_redis(self):
+        archive = pack_replay({**self.replay, 'events': [[index, index % 31, index % 47, 0] for index in range(1000)]})
+        self.assertGreater(len(archive), 200)
+        for game, rankings in GAME_RANKINGS.items():
+            with self.subTest(game=game):
+                ranking_key = rankings[0].key
+                MiniGameBestScore.objects.create(player=self.player, ranking_key=ranking_key, score=1234, replay_archive=archive)
+                with patch('minigame.services.MiniGameRankingCache') as cache, patch('minigame.services.pack_replay') as compress, self.assertNumQueries(1):
+                    response = self.client.get(f'/api/minigame/{game}/replay', {'player': self.player.id, 'key': ranking_key.removeprefix(f'{game}-')}, HTTP_ACCEPT_ENCODING='gzip', HTTP_ORIGIN='http://localhost:5173')
+                cache.assert_not_called()
+                compress.assert_not_called()
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content, archive)
+                self.assertEqual(response['Content-Type'], 'application/x-7z-compressed')
+                self.assertEqual(response['Content-Encoding'], 'identity')
+                self.assertEqual(response['Content-Length'], str(len(archive)))
+                self.assertEqual(response['X-Minigame-Score'], '1234')
+                self.assertIn('X-Minigame-Score', response['Access-Control-Expose-Headers'])
+                self.assertIn('no-transform', response['Cache-Control'])
+
+    def test_replay_missing_or_unknown_ranking_returns_404(self):
+        MiniGameBestScore.objects.create(player=self.player, ranking_key=self.ranking_key, score=1000)
+        for game, key, player in (('left-click', 'b-50-v1', self.player.id), ('left-click', 'b-50-v1', 999999999), ('left-click', 'no', self.player.id), ('no', 'b-50-v1', self.player.id)):
+            response = self.client.get(f'/api/minigame/{game}/replay', {'player': player, 'key': key})
+            self.assertEqual(response.status_code, 404)
+        record = self.submit(500)['record']
+        self.assertEqual(self.client.get('/api/minigame/left-click/replay', {'player': self.player.id, 'key': 'b-50-v1'}).content, record.replay_archive)
+        for query in ({'player': self.player.id}, {'key': 'b-50-v1'}, {'player': 'invalid', 'key': 'b-50-v1'}):
+            self.assertEqual(self.client.get('/api/minigame/left-click/replay', query).status_code, 422)
+
     def test_multi_touch_accepts_all_modes_and_caches_scores_without_replays(self):
         first_key = GAME_RANKINGS['multi-touch'][0].key
         self.assertFalse(self.player.has_realname())
@@ -244,6 +274,59 @@ class MiniGameRankingTests(TestCase):
             self.submit(1500, player=other)
             ranking = get_ranking('left-click', self.ranking_key, 0, 20)
             self.assertEqual(ranking['players'][0]['player_id'], self.player.id)
+            summary = get_ranking_summary(self.ranking_key, self.player.id)
+            self.assertEqual(summary['player']['records'][self.ranking_key]['rank'], 1)
+
+    def test_summary_reads_only_selected_ranking_and_includes_personal_rank_beyond_first_page(self):
+        players = [self.make_player(f'summary-{index}') for index in range(22)]
+        MiniGameBestScore.objects.bulk_create([
+            MiniGameBestScore(player=player, ranking_key=self.ranking_key, score=1000 + index)
+            for index, player in enumerate(players)
+        ])
+        self.submit(9000)
+        other_key = GAME_RANKINGS['left-click'][1].key
+        self.submit(1, other_key)
+        summary = get_ranking_summary(self.ranking_key, self.player.id)
+        self.assertEqual(summary['count'], 23)
+        self.assertEqual(len(summary['players']), 20)
+        self.assertEqual([row['rank'] for row in summary['players']], list(range(1, 21)))
+        self.assertEqual(summary['player']['records'][self.ranking_key]['rank'], 23)
+        for row in [*summary['players'], summary['player']]:
+            self.assertEqual(list(row['records']), [self.ranking_key])
+        self.assertFalse(self.cache.client.exists(self.cache.ready_key(other_key)))
+        with self.assertNumQueries(0):
+            self.assertEqual(get_ranking_summary(self.ranking_key, self.player.id), summary)
+        self.client.force_login(self.player)
+        response = self.client.get(f'/api/minigame/{self.ranking_key}/summary')
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['count'], 23)
+        self.assertEqual(response.json()['player']['records'][self.ranking_key]['rank'], 23)
+        self.assertIn('private', response['Cache-Control'])
+        self.assertIn('no-store', response['Cache-Control'])
+
+    def test_summary_handles_guests_empty_rankings_and_unranked_logged_in_players(self):
+        for game, rankings in GAME_RANKINGS.items():
+            with self.subTest(game=game):
+                ranking_key = rankings[0].key
+                response = self.client.get(f'/api/minigame/{ranking_key}/summary')
+                self.assertEqual(response.status_code, 200, response.content)
+                self.assertEqual(response.json(), {'count': 0, 'players': [], 'player': None})
+        self.client.force_login(self.player)
+        response = self.client.get(f'/api/minigame/{self.ranking_key}/summary', {'player': 999999})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['player'], {'player_id': self.player.id, 'records': {self.ranking_key: None}})
+        self.assertEqual(self.client.get('/api/minigame/unknown/summary').status_code, 404)
+
+    def test_summary_database_fallback_excludes_other_rankings_and_replay_data(self):
+        self.submit(1000)
+        self.submit(2000, GAME_RANKINGS['left-click'][1].key)
+        with patch('minigame.services.MiniGameRankingCache', side_effect=RedisConnectionError), self.assertLogs('minigame.services', 'ERROR'):
+            with self.assertNumQueries(4), CaptureQueriesContext(connection) as queries:
+                summary = get_ranking_summary(self.ranking_key, self.player.id)
+        self.assertTrue(all('replay' not in query['sql'].lower() for query in queries))
+        self.assertEqual(list(summary['players'][0]['records']), [self.ranking_key])
+        self.assertEqual(summary['player']['records'][self.ranking_key]['score'], 1000)
+        self.assertIsNone(summary['player']['records'][self.ranking_key]['rank'])
 
     @override_settings(RATELIMIT_ENABLE=True)
     def test_submission_limits_accounts_independently_of_ip(self):
@@ -259,6 +342,14 @@ class MiniGameRankingTests(TestCase):
                 if index == 0:
                     response = self.client.post(url, self.post_data(1000), REMOTE_ADDR='2001:db8::1')
                     self.assertEqual(response.status_code, 429)
+
+    @override_settings(RATELIMIT_ENABLE=True)
+    def test_replay_query_rate_limit(self):
+        self.submit(1000)
+        address = f'2001:db8::{uuid4().hex[:4]}:{uuid4().hex[:4]}'
+        with patch('django_ratelimit.core.time.time', return_value=1800000000):
+            statuses = [self.client.get('/api/minigame/left-click/replay', {'player': self.player.id, 'key': 'b-50-v1'}, REMOTE_ADDR=address).status_code for _ in range(6)]
+        self.assertEqual(statuses, [200] * 5 + [429])
 
     @override_settings(RATELIMIT_ENABLE=True)
     def test_real_query_rate_limit(self):

@@ -17,13 +17,14 @@
                     </span>
                 </div>
                 <div class="realname">
-                    {{ user.isAnonymous ? t('common.anonymous') : user.realname }}
+                    {{ user.isAnonymous ? t('anonymous') : user.realname }}
                 </div>
                 <div class="fullname">
                     {{ formatName(user.firstname, user.lastname, local.nameFormat) }}
                 </div>
             </template>
         </div>
+        <ProfilePins class="profile-pins" :user-id="user.id" />
         <BaseButton v-if="store.isSelf" class="edit-button" @click="router.push({ name: 'user-settings', params: { id: user.id } })">
             {{ t('local.editButton') }}
         </BaseButton>
@@ -40,6 +41,7 @@ import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 
 import Avatar from './Avatar.vue';
+import ProfilePins from './ProfilePins.vue';
 import ProfileQualification from './ProfileQualification.vue';
 
 import BaseButton from '@/components/common/BaseButton.vue';
@@ -75,6 +77,10 @@ const { t } = useI18n({ messages: i18nMessages });
 </script>
 
 <style scoped lang="less">
+.profile-pins {
+    width: 100%;
+}
+
 /* 横向布局：窄屏顶部栏 */
 .horizontal-profile {
     display: flex;
