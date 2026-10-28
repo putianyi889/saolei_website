@@ -24,6 +24,7 @@
         <GitHubUser username="ljzloser" />
         <GitHubUser username="hwatson381" />
         <GitHubUser username="hgraceb" />
+        <GitHubUser username="Corday-nkusky" />
     </div>
     <div class="section-label">
         <strong>{{ t('local.localization') }}</strong>
