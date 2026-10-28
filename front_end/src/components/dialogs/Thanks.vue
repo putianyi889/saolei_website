@@ -80,6 +80,7 @@ const acknowledgements = [
     { text: 'gacord' },
     { text: 'Nanaka.' },
     { text: '购置拆解' },
+    { text: '毛毛虫' },
 ];
 
 /* 本地化 Localization */
