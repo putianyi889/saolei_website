@@ -13,6 +13,7 @@ from identifier.models import Identifier
 from identifier.services import bind_identifier
 from identifier.utils import verify_identifier
 from msuser.models import UserMS
+from speedranking.pb.utils import encode_score
 from tournament.cache import TournamentCache
 from tournament.gsc.utils import gsc_encode_best
 from tournament.models import GSCParticipant, GSCTournament, TournamentUser
@@ -227,6 +228,10 @@ def bind_gsc_history_identifier(participant: GSCParticipant, identifier_text: st
 def upload_gsc_history_video(participant: GSCParticipant, file, upload_time):
     if timezone.is_naive(upload_time):
         raise ExceptionToResponse('upload_time', 'timezone_required', status_code=422)
+    try:
+        encode_score(0, upload_time)
+    except (ValueError, OverflowError) as error:
+        raise ExceptionToResponse('upload_time', 'invalid', status_code=422) from error
 
     parser = MSVideoParser(file)
     user = participant.user
