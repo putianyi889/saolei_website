@@ -12,11 +12,13 @@
 
 配置在 `saolei/settings.py`：
 
-| 设置 | 环境变量 | 默认值 | 说明 |
+| 设置 | 来源 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `WOM_API_BASE_URL` | `WOM_API_BASE_URL` | `https://api.lockhart.ren` | 服务地址 |
-| `WOM_API_TOKEN` | `WOM_API_TOKEN` | 空 | 36 位令牌，只放服务端环境变量，不下发前端 |
-| `WOM_API_TIMEOUT` | `WOM_API_TIMEOUT` | `6` | 单次请求超时（秒） |
+| `WOM_API_BASE_URL` | 环境变量 `WOM_API_BASE_URL` | `https://api.lockhart.ren` | 服务地址 |
+| `WOM_API_TOKEN` | `secrets.json` 的 `wom_api_token` | 空 | 36 位令牌，不放代码、不下发前端 |
+| `WOM_API_TIMEOUT` | 环境变量 `WOM_API_TIMEOUT` | `6` | 单次请求超时（秒） |
+
+令牌与 Mineracer partner key、扫雷网 API key 一样走 `utils/secrets_json.py`：文件默认在 `back_end/saolei/secrets.json`（已被 `.gitignore` 忽略），用 `write_secret('wom_api_token', '...')` 写入，建议 `chmod 600`。
 
 重试策略是 `wom/client.py` 里的常量：最多 `ATTEMPTS = 2` 次、退避上限 `MAX_RETRY_DELAY = 2` 秒；配合 6 秒超时，整体留在前端 20 秒请求超时之内。
 
@@ -91,6 +93,6 @@ nginx 默认的 `uwsgi_read_timeout 2` 不够：单次请求就可能 2–3 秒�
 
 ## 依赖与迁移
 
-`requirements.txt` 不含 `wom-api`；`requirements-wheels.txt` 只为 `msgames-api` 固定 wheel。HTTPS 证书用 `certifi` 校验（`requests` 的传递依赖，与仓库其他地方一致）。部署前需在后端进程环境配置 `WOM_API_TOKEN`，未配置时只有该同步功能失败。
+`requirements.txt` 不含 `wom-api`；`requirements-wheels.txt` 只为 `msgames-api` 固定 wheel。HTTPS 证书用 `certifi` 校验（`requests` 的传递依赖，与仓库其他地方一致）。部署前需在 `back_end/saolei/secrets.json` 写入 `wom_api_token`，未配置时只有该同步功能失败。
 
 `accountlink/migrations/0010`–`0012` 由 `makemigrations` 生成（删除库存列、添加统计列、收紧计数类型、耐力字段非空），项目忽略迁移文件，提交时需 `git add -f`。
