@@ -17,11 +17,13 @@ top 原始十八项统一参与用户集合，并以变换后的均值作为降�
 
 NF 是独立维度，由 `VideoModel.right_ce == 0` 判断，不再使用模式 `12`；`right_ce` 为空不视为 NF。`UserMS` 不维护 NF 或原模式的子计数。`videomanager` 捕获 `right_ce` 变化并更新队列；`customranking` 不需要 NF 信息，不监听此字段。批量转换旧模式后需显式刷新统计及缓存，步骤见 `back_end/saolei/msuser/refactor.md`。
 
-效率榜由独立 `effranking.signals` 监听录像保存和删除，复用 `_old_values` 及 `update_fields` 判断影响范围。除资格、玩家、级别及上传时间外，还监控 `bv/left_ce/right_ce/double_ce`，不按 NF 分榜。提交后重读数据库生成的 Thrp，改善直接比较缓存，原纪录失效或变差才查库补位；回滚不更新 Redis。绑定/解绑标识和比赛公开显式调用 `add_videos_to_eff_ranks` / `remove_videos_from_eff_ranks`。异常记录上下文和堆栈后继续抛出，见 `back_end/saolei/effranking/README.md`。
+效率榜由独立 `effranking.signals` 监听录像保存和删除，复用 `_old_values` 及 `update_fields` 判断影响范围。除资格、玩家、级别及上传时间外，还监控 `bv/left_ce/right_ce/double_ce`。提交后重读数据库生成的 Thrp，原有四项改善直接比较缓存，原纪录失效或变差才查库补位。独立的高级 NF 项通过 `right_ce=0` 筛选，对受影响用户重建满分录像 ID 列表或最佳一局，局数取列表长度；回滚不更新 Redis。绑定/解绑标识和比赛公开显式调用 `add_videos_to_eff_ranks` / `remove_videos_from_eff_ranks`。异常记录上下文和堆栈后继续抛出，见 `back_end/saolei/effranking/README.md`。
 
 录像删除时，`videomanager.signals.delete_video_expansion` 在当前事务内清理扩展记录；从扩展记录发起的删除沿用 Django 级联，避免重复处理。`customranking.signals.refresh_custom_pluck_rank_on_video_delete` 在提交后从剩余录像补选数据库纪录并更新 Redis；`CustomPluckRecord` 删除后的缓存同步提交后重读当前纪录，回滚不发布删除或补位结果。
 
 最新录像队列明确保留现状：删除录像不清理 `newest_queue` 快照，查询仍可能返回已删除 ID，只由既有裁剪和管理员移除功能维护。
+
+纪念账号补录与 GSC 分别编排导入流程，复用现有标识绑定、文件比较及 `set_import_upload_time`，沿用原有统计、排行、勋章和比赛标识维护链；`is_memorial`、`is_active=False` 不排除合法录像的计分。
 
 比赛录像普通删除清除录像及比赛关联，暂时保留已结算成绩、名次、积分和历史最好成绩，不在删除信号中自动重算。显式重算按赛种及成绩来源处理：打卡赛和 GSC 录像来源不再计入已删除录像；GSC 参赛者的 `manual_scores=True` 保留录入成绩，但仍参与全场排名及积分更新。各新赛种须提供自己的删除及重算规则。站长 `POST /api/video/admin/delete` 每次接收一个 ID，通过事务内实例 `delete()` 沿用这些信号，返回受影响比赛 ID 并记录日志警告；隐藏中文页面在警告确认后依次请求，遇错即停。未来通知主办方的私信尚未实现，方案见仓库 `back_end/saolei/tournament/VIDEO_DELETION_PLAN.md`。
 
@@ -61,6 +63,7 @@ flowchart LR
     video_post_delete --> refresh_custom_pluck_rank_on_video_delete[提交后补位pluck纪录]
 
     video_pre_delete --> update_video_count_on_video_delete[删除用户录像统计]
+    profile_post_delete[UserProfile post_delete] --> delete_user_ms[删除关联扫雷资料]
 
 
 
@@ -117,6 +120,8 @@ flowchart LR
     click refresh_custom_pluck_rank_on_video_delete "#signal-function-map" "录像删除提交后从剩余合格录像补位自定义 pluck 纪录"
     click delete_video_expansion "#signal-function-map" "录像删除事务内清理扩展记录，扩展记录源的删除沿用原级联"
     click update_video_count_on_video_delete "#signal-function-map" "录像删除前按当前比赛标记及关联减少数量和空间"
+    click profile_post_delete "#signal-function-map" "用户删除后触发关联扫雷资料清理"
+    click delete_user_ms "#signal-function-map" "同一事务内按真实外键删除 UserMS，UserMS 发起的级联跳过重复清理"
     click update_custom_pluck_cache_on_record_save "#signal-function-map" "pluck 纪录保存后同步排行缓存"
     click update_custom_pluck_cache_on_record_delete "#signal-function-map" "pluck 纪录删除提交后按当前数据库纪录同步缓存"
     click update_cache_on_tournament_save "#signal-function-map" "比赛保存后同步 NORMAL 比赛缓存"
@@ -132,6 +137,8 @@ flowchart LR
 ```
 
 <a id="signal-function-map"></a>
+
+`UserProfile.post_delete` 调用 `userprofile.signals.delete_user_ms`，在同一删除事务内按 `instance.userms_id` 清理关联 `UserMS`，并由已有外键删除其标识；覆盖实例、QuerySet 及 Admin 删除。`origin` 为 `UserMS` 实例或 QuerySet 时跳过，因为原收集器已经负责删除，避免重复信号。无关联资料时直接跳过，清理失败会回滚用户与资料删除。历史孤立资料使用 [cleanup_orphan_userms](./management-commands.md#cleanup-orphan-userms) 处理。
 
 `MiniGameBestScore.post_delete` 调用 `minigame.signals.delete_cached_score`，在事务提交后从该榜 ZSET 和明细 Hash 移除玩家，保留初始化标记；覆盖 Admin、QuerySet 和用户级联删除，回滚不改缓存。小游戏创建和改善由提交服务直接注册 `on_commit` 更新，不另设保存信号。
 
@@ -149,6 +156,7 @@ GSC 历史补录沿用默认 TournamentUser 创建和 best 保存信号，允许
 | 刷新状态队列 | `refresh_state_queue_on_video_save` |
 | 更新用户录像统计与上传额度 | `update_video_count_on_video_save` |
 | 删除用户录像统计 | `update_video_count_on_video_delete` |
+| 删除关联扫雷资料 | `userprofile.signals.delete_user_ms` |
 | 将比赛录像挂载到比赛 | `add_created_video_to_checked_tournaments` |
 | 刷新pluck纪录 | `refresh_custom_pluck_rank_on_video_save` |
 | 提交后补位pluck纪录 | `refresh_custom_pluck_rank_on_video_delete` |

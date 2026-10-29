@@ -81,9 +81,19 @@ const routes: RouteRecordRaw[] = [
         children: staffRoutes,
     },
     {
+        path: '/superuser/staff',
+        name: 'superuser-staff',
+        component: () => import('../views/StaffView/StaffAssignments.vue'),
+    },
+    {
         path: '/superuser/delete-videos',
         name: 'superuser-delete-videos',
         component: () => import('../views/StaffView/DeleteVideos.vue'),
+    },
+    {
+        path: '/superuser/memorial',
+        name: 'superuser-memorial',
+        component: () => import('../views/StaffView/MemorialAccounts.vue'),
     },
     {
         path: '/tournament/:id',

@@ -6,6 +6,22 @@
 python manage.py <command> --help
 ```
 
+## 纪念账号建档
+
+### `create_memorial_account`
+
+位置：`common/management/commands/create_memorial_account.py`。
+
+站长先通过服务器、既有命令和 shell 核实注销及清理旧身份，再显式指定 UserProfile ID、UserMS ID 和用户名。两个编号必须分别未占用且小于各自表当前最大主键；不自动追加、不接管孤立 UserMS，空表拒绝建档。
+
+```bash
+python manage.py create_memorial_account 42 70 legend --realname "传奇玩家" --country CN
+```
+
+ID 和资料仅为示例，须替换为已核实的空缺；另支持 `--firstname`、`--lastname`、`--signature`。命令在事务内锁定两表最大主键行、复核空缺并只执行插入，模型验证或占用冲突回滚。新账号不可登录、无管理员权限、使用不可用密码及独立占位邮箱。
+
+旧数据清理和资料维护由站长使用已有工具完成；录像补传使用 `/superuser/memorial`。业务规则见仓库 `back_end/saolei/userprofile/README.md`。
+
 ## 勋章补发
 
 ### `enqueue_medal_backfill`
@@ -81,7 +97,7 @@ python -m dangerzone.init_local_test --no-weekly
 
 位置：`effranking/management/commands/rebuild_eff_ranks.py`
 
-从录像数据库重建效率 Thrp 榜。`--ranking-name` 仅支持 `thrp`（默认值）；`--batch-size` 默认 1000，必须为正数。
+从录像数据库重建效率 Thrp 榜，包括高级 NF 最佳及满分局数。`--ranking-name` 仅支持 `thrp`（默认值）；`--batch-size` 默认 1000，必须为正数。增加高级 NF 后需执行一次，将历史录像纳入新榜，不需要数据库迁移。
 
 ```bash
 python manage.py rebuild_eff_ranks
@@ -198,6 +214,28 @@ python manage.py rebuild_custom_pluck_cache --level c16_30_150
 
 ## 数据刷新
 
+### `backfill_video_hashes`
+
+位置：`videomanager/management/commands/backfill_video_hashes.py`
+
+部署后先完成数据库迁移，再手动执行本命令，为所有尚无 `original_hash`（NULL 或空字符串）的录像回填原始文件 SHA-256 的前 96 位，保存为 24 个小写十六进制字符。包含所有状态及比赛录像；已有哈希保持不变。逐个读取文件计算，不解析录像，仅通过条件更新写入哈希，不触发保存信号、排行或缓存更新，不修改上传及查重逻辑。
+
+启动时统计待回填数量并固定最大录像 ID；按 ID 分批读取记录，文件分块计算哈希，避免一次加载全部录像或文件内容。输出已处理/总数、百分比、成功、失败、跳过数量及当前 ID，初始和结束时也输出进度。执行期间删除或被其他进程回填的记录，可能使实际处理数量小于初始总数；新上传录像可在下次执行时补齐。
+
+文件缺失时报告录像 ID，保留空哈希并继续；其他文件读写或数据库错误停止命令，之前完成的回填保留，可重新执行。写入时确认文件路径未变化且哈希仍为空，避免覆盖其他进程的结果。当前只处理原始录像文件，不进行压缩或解压。
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--start` | `0` | 起始录像 ID，包含，必须非负 |
+| `--end` | 不限制 | 结束录像 ID，不包含，不能小于 `start` |
+| `--batch-size` | `1000` | 每批读取的记录数量，必须为正整数 |
+| `--step` | `100` | 每处理多少条输出一次进度，必须为正整数 |
+
+```bash
+python manage.py backfill_video_hashes
+python manage.py backfill_video_hashes --start 10000 --end 20000 --step 10
+```
+
 ### `refresh_videos`
 
 位置：`videomanager/management/commands/refresh_videos.py`
@@ -271,6 +309,25 @@ python manage.py refresh_tournament_scores 123
 ```bash
 python manage.py refresh_tournament_user_stats
 ```
+
+## 数据清理
+
+### `cleanup_orphan_userms` {#cleanup-orphan-userms}
+
+位置：`msuser/management/commands/cleanup_orphan_userms.py`
+
+删除没有关联 `UserProfile` 的孤立 `UserMS`，并按既有外键级联删除这些资料的标识。通过真实关联判断是否孤立，不比较两张表的主键数值；已经关联用户的资料全部保留，包括停用账号。
+
+```bash
+python manage.py cleanup_orphan_userms --dry-run
+python manage.py cleanup_orphan_userms --batch-size 1000
+```
+
+`--dry-run` 只统计；`--batch-size` 默认 1000，必须为正数；`--database` 默认 `default`，可指定已配置的数据库别名。输出只统计 `UserMS` 数量，不把级联删除的标识计入其中，重复执行没有待清理数据时输出 0。
+
+实际删除按主键分批，每批独立事务：先锁定候选 `UserMS` 行，再重新检查用户关联，保留候选查询之后已关联的资料。失败时回滚当前批，此前完成的批次保留。命令不扫描或改写 Redis，也不重建用户排行。新的账号删除已由 `UserProfile.post_delete` 自动清理其关联 `UserMS`；本命令处理历史遗留或其他来源的孤立资料。
+
+执行期间暂停先创建 `UserMS`、再关联账号的写入流程；尚未完成关联的新资料也符合孤立条件，命令无法将其与历史残留区分。
 
 ## 缓存清理
 
