@@ -6,6 +6,42 @@
 python manage.py <command> --help
 ```
 
+## 纪念账号建档
+
+### `create_memorial_account`
+
+位置：`common/management/commands/create_memorial_account.py`。
+
+站长先通过服务器、既有命令和 shell 核实注销及清理旧身份，再显式指定 UserProfile ID、UserMS ID 和用户名。两个编号必须分别未占用且小于各自表当前最大主键；不自动追加、不接管孤立 UserMS，空表拒绝建档。
+
+```bash
+python manage.py create_memorial_account 42 70 legend --realname "传奇玩家" --country CN
+```
+
+ID 和资料仅为示例，须替换为已核实的空缺；另支持 `--firstname`、`--lastname`、`--signature`。命令在事务内锁定两表最大主键行、复核空缺并只执行插入，模型验证或占用冲突回滚。新账号不可登录、无管理员权限、使用不可用密码及独立占位邮箱。
+
+旧数据清理和资料维护由站长使用已有工具完成；录像补传使用 `/superuser/memorial`。业务规则见仓库 `back_end/saolei/userprofile/README.md`。
+
+## 扫雷网首次迁移与增量同步
+
+### `sync_saolei_api`
+
+位置：`accountlink/management/commands/sync_saolei_api.py`。使用服务器 `secrets.json` 的 `saolei_api_key`，只处理已验证且关联一致的扫雷网账号。首批仅提供此管理命令，旧查询关闭，不开放新的 Web API，前端代码不动。
+
+部署时先使用已有 `backfill_video_hashes` 补齐存量原文件哈希，再运行 `makemigrations accountlink --noinput` 并核对生成结果，最后运行 `migrate`。迁移文件按仓库惯例不跟踪，编号取决于服务器已有历史；应生成删除旧 `VideoSaolei`、创建独立 `SaoleiApiVideo` 及账号字段变更的结构迁移，保留账号绑定、本站录像、扩展记录及文件。首次运行可先指定一个扫雷网账号 ID 核对结果，再处理全部绑定：
+
+```bash
+python manage.py sync_saolei_api --account-id 101 --full
+python manage.py sync_saolei_api --all-linked --full
+python manage.py sync_saolei_api --all-linked
+```
+
+`--account-id` 可重复指定；`--all-linked` 表示全部已验证绑定，两者必须选择其一。`--full` 从 0 重新扫描目录，不清空数据、不回退账号成功游标；去掉此选项用于增量和中断续跑。`--page-size` 默认为 200，取值 1 至 1000。命令发现任何存量录像缺少原文件哈希时拒绝同步。
+
+整个命令串行共用一个客户端，数据请求间隔 2.1 秒，文件请求间隔 0.4 秒；不要并行启动多个同步命令。目录页和 `AccountSaolei.video_sync_cursor` 同事务提交，失败不推进；目录同步后还会补导本地白名单内未完成的录像，避免游标已推进但文件未导入时漏导。软件精确白名单为 `Clone`、`Vienna`、`Arbiter`、`元扫雷3.3.4`，其他名称只保存目录并跳过；上游 `status` 不限制导入。
+
+同主文件哈希命中时复用既有本站录像，异主冲突不改归属或上传时间。单项失败保留成功进度并汇总，退出码非零；鉴权失败和限流立即停止，不自动重试。进度见命令输出和 `accountlink` 日志，接口关闭由站长人工鉴定，同步完成不自动开放接口。账号资料仅采用 ID、姓名和外站封禁状态，不同步成绩或标识列表。
+
 ## 勋章补发
 
 ### `enqueue_medal_backfill`
@@ -204,7 +240,7 @@ python manage.py rebuild_custom_pluck_cache --level c16_30_150
 
 部署后先完成数据库迁移，再手动执行本命令，为所有尚无 `original_hash`（NULL 或空字符串）的录像回填原始文件 SHA-256 的前 96 位，保存为 24 个小写十六进制字符。包含所有状态及比赛录像；已有哈希保持不变。逐个读取文件计算，不解析录像，仅通过条件更新写入哈希，不触发保存信号、排行或缓存更新，不修改上传及查重逻辑。
 
-启动时统计待回填数量并固定最大录像 ID；按 ID 分批读取记录，文件分块计算哈希，避免一次加载全部录像或文件内容。输出已处理/总数、百分比、成功、失败、跳过数量及当前 ID，初始和结束时也输出进度。执行期间删除或被其他进程回填的记录，可能使实际处理数量小于初始总数；新上传录像可在下次执行时补齐。
+启动时统计待回填数量并固定最大录像 ID；按 ID 分批读取记录，文件分块计算哈希，避免一次加载全部录像或文件内容。输出已处理/总数、百分比、成功、失败、跳过数量及当前 ID，初始和结束时也输出进度。执行期间删除或被其他进程回填的记录，可能使实际处理数量小于初始总数。上传及导入入口已在解析前计算哈希并随新录像保存；部署查重切换后应再执行一次本命令，补齐此前旧代码运行期间新增的空哈希记录。
 
 文件缺失时报告录像 ID，保留空哈希并继续；其他文件读写或数据库错误停止命令，之前完成的回填保留，可重新执行。写入时确认文件路径未变化且哈希仍为空，避免覆盖其他进程的结果。当前只处理原始录像文件，不进行压缩或解压。
 
@@ -293,6 +329,25 @@ python manage.py refresh_tournament_scores 123
 ```bash
 python manage.py refresh_tournament_user_stats
 ```
+
+## 数据清理
+
+### `cleanup_orphan_userms` {#cleanup-orphan-userms}
+
+位置：`msuser/management/commands/cleanup_orphan_userms.py`
+
+删除没有关联 `UserProfile` 的孤立 `UserMS`，并按既有外键级联删除这些资料的标识。通过真实关联判断是否孤立，不比较两张表的主键数值；已经关联用户的资料全部保留，包括停用账号。
+
+```bash
+python manage.py cleanup_orphan_userms --dry-run
+python manage.py cleanup_orphan_userms --batch-size 1000
+```
+
+`--dry-run` 只统计；`--batch-size` 默认 1000，必须为正数；`--database` 默认 `default`，可指定已配置的数据库别名。输出只统计 `UserMS` 数量，不把级联删除的标识计入其中，重复执行没有待清理数据时输出 0。
+
+实际删除按主键分批，每批独立事务：先锁定候选 `UserMS` 行，再重新检查用户关联，保留候选查询之后已关联的资料。失败时回滚当前批，此前完成的批次保留。命令不扫描或改写 Redis，也不重建用户排行。新的账号删除已由 `UserProfile.post_delete` 自动清理其关联 `UserMS`；本命令处理历史遗留或其他来源的孤立资料。
+
+执行期间暂停先创建 `UserMS`、再关联账号的写入流程；尚未完成关联的新资料也符合孤立条件，命令无法将其与历史残留区分。
 
 ## 缓存清理
 
