@@ -83,6 +83,7 @@ const acknowledgements = [
     { text: 'Nanaka.' },
     { text: '购置拆解' },
     { text: '毛毛虫' },
+    { text: '铧嵇' },
 ];
 
 /* 本地化 Localization */
