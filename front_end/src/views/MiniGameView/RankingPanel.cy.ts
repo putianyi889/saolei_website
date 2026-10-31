@@ -169,7 +169,7 @@ describe('current minigame ranking', () => {
         const expectTime = (time: string, ces?: string) => {
             cy.get('[data-cy=minigame-history-panel] table').extractTableData().should((rows) => {
                 expect(rows).to.have.length(2);
-                expect(rows[1].slice(1)).to.deep.equal(ces ? [time, ces] : [time]);
+                expect(rows[1].slice(1)).to.deep.equal(ces !== undefined ? [time, ces] : [time]);
             });
         };
         mountGame();

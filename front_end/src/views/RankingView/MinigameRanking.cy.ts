@@ -55,7 +55,9 @@ describe('minigame rankings', () => {
         cy.window().its('localStorage').invoke('getItem', 'minigame-settings').should((value: string | null) => {
             expect((JSON.parse(value ?? '{}') as { leftClickScoreDisplay?: string }).leftClickScoreDisplay).to.eq('ces');
         });
-        cy.get('.minigame-ranking-table tbody tr td').eq(3).should('have.text', '--');
+        cy.get('.minigame-ranking-table table').extractTableData().should((rows) => {
+            expect(rows.at(-1)?.[3]).to.eq('--');
+        });
         cy.get('.minigame-ranking-table th[aria-sort=descending]').should('have.length', 1);
         cy.get('@rank.all').should('have.length', 1);
         cy.then(() => router.push('/ranking/minigame/multi-touch'));
