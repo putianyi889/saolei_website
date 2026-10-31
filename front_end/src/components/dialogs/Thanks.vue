@@ -11,6 +11,7 @@
     <div class="section-body">
         <PlayerName :user-id="2" />
         <PlayerName :user-id="24" />
+        <PlayerName :user-id="44" />
         <PlayerName :user-id="82" />
         <PlayerName :user-id="114" />
     </div>
@@ -24,6 +25,7 @@
         <GitHubUser username="ljzloser" />
         <GitHubUser username="hwatson381" />
         <GitHubUser username="hgraceb" />
+        <GitHubUser username="LockhartANR" />
         <GitHubUser username="Corday-nkusky" />
     </div>
     <div class="section-label">
