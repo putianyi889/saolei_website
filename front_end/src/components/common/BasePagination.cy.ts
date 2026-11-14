@@ -208,7 +208,7 @@ describe('<BasePagination />', () => {
         cy.then(() => {
             width.value = 1920;
         });
-        cy.get('[data-cy=segment]').then(($buttons) => {
+        cy.get('[data-cy=segment]').should(($buttons) => {
             expect($buttons.length).to.be.greaterThan(7);
         });
     });
