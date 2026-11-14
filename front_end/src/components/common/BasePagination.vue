@@ -83,6 +83,7 @@ const nextStartValue = computed(() => nextStart(effectiveStart.value, normalized
 const jumpValue = ref<string>(String(effectiveStart.value));
 
 let observer: ResizeObserver | undefined;
+let resizeFrame = 0;
 
 onMounted(() => {
     const nav = navRef.value;
@@ -90,13 +91,19 @@ onMounted(() => {
     availableWidth.value = nav.clientWidth;
     observer = new ResizeObserver((entries) => {
         const width = entries[0]?.contentRect.width;
-        if (width !== undefined) availableWidth.value = width;
+        if (width === undefined) return;
+        cancelAnimationFrame(resizeFrame);
+        resizeFrame = requestAnimationFrame(() => {
+            const rounded = Math.round(width);
+            if (rounded !== availableWidth.value) availableWidth.value = rounded;
+        });
     });
     observer.observe(nav);
 });
 
 onBeforeUnmount(() => {
     observer?.disconnect();
+    cancelAnimationFrame(resizeFrame);
 });
 
 watch([normalizedTotal, effectivePageSize, currentStart], () => {
@@ -104,8 +111,8 @@ watch([normalizedTotal, effectivePageSize, currentStart], () => {
     jumpValue.value = String(effectiveStart.value);
 }, { immediate: true });
 
-function emitChange() {
-    emit('change', rangeFor(normalizedTotal.value, effectivePageSize.value, effectiveStart.value));
+function emitChange(start: number, size: number) {
+    emit('change', rangeFor(normalizedTotal.value, size, start));
 }
 
 function goTo(target: number) {
@@ -113,7 +120,7 @@ function goTo(target: number) {
     const next = clampStart(target, normalizedTotal.value);
     if (next === effectiveStart.value) return;
     currentStart.value = next;
-    emitChange();
+    emitChange(next, effectivePageSize.value);
 }
 
 function handlePageSizeChange(event: Event) {
@@ -122,7 +129,7 @@ function handlePageSizeChange(event: Event) {
     if (props.disabled || !Number.isInteger(next) || next < 1) return;
     pageSize.value = next;
     currentStart.value = 1;
-    emitChange();
+    emitChange(1, next);
 }
 
 function commitJump() {
@@ -134,7 +141,7 @@ function commitJump() {
     jumpValue.value = String(next);
     if (!valid || normalizedTotal.value === 0 || next === effectiveStart.value) return;
     currentStart.value = next;
-    emitChange();
+    emitChange(next, effectivePageSize.value);
 }
 
 const i18nMessages = {
