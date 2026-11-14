@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-    buildPaginationItems, canGoNext, clampStart, lastSegmentStart, nextStart,
-    normalizePageSize, normalizeTotal, previousStart, rangeFor, segmentCount,
+    buildPaginationItems, canGoNext, clampStart, DEFAULT_MAX_SEGMENTS, lastSegmentStart,
+    maxSegmentsForWidth, nextStart, normalizePageSize, normalizeTotal, PAGINATION_WIDE_MAX_SEGMENTS,
+    previousStart, rangeFor, segmentCount,
 } from './pagination';
 
 describe('pagination calculations', () => {
@@ -72,5 +73,40 @@ describe('pagination calculations', () => {
 
     it('returns no segment buttons for an empty result', () => {
         expect(buildPaginationItems({ total: 0, pageSize: 25, currentStart: 1 })).toEqual([]);
+    });
+
+    it('grades the segment budget linearly by container width', () => {
+        expect(maxSegmentsForWidth(0)).toBe(DEFAULT_MAX_SEGMENTS);
+        expect(maxSegmentsForWidth(Number.NaN)).toBe(DEFAULT_MAX_SEGMENTS);
+        expect(maxSegmentsForWidth(200)).toBe(1);
+        expect(maxSegmentsForWidth(480)).toBe(3);
+        expect(maxSegmentsForWidth(640)).toBe(4);
+        expect(maxSegmentsForWidth(700)).toBe(5);
+        expect(maxSegmentsForWidth(950)).toBe(7);
+        expect(maxSegmentsForWidth(1280)).toBe(11);
+        expect(maxSegmentsForWidth(1920)).toBe(PAGINATION_WIDE_MAX_SEGMENTS);
+        expect(maxSegmentsForWidth(2560)).toBe(PAGINATION_WIDE_MAX_SEGMENTS);
+        expect(maxSegmentsForWidth(3840)).toBe(PAGINATION_WIDE_MAX_SEGMENTS);
+        expect(maxSegmentsForWidth(1200)).toBeLessThan(maxSegmentsForWidth(1600));
+    });
+
+    it('keeps the first, current and last intervals when the width budget shrinks', () => {
+        const options = { total: 1000, pageSize: 25, currentStart: 501 };
+        const wide = buildPaginationItems({ ...options, maxSegments: maxSegmentsForWidth(700) });
+        expect(wide.filter((item) => item.type === 'segment')).toHaveLength(7);
+        expect(buildPaginationItems({ ...options, maxSegments: maxSegmentsForWidth(300) })).toEqual([
+            { type: 'segment', start: 1, end: 25, current: false },
+            { type: 'ellipsis' },
+            { type: 'segment', start: 501, end: 525, current: true },
+            { type: 'ellipsis' },
+            { type: 'segment', start: 976, end: 1000, current: false },
+        ]);
+    });
+
+    it('shows more intervals on a wide screen', () => {
+        const options = { total: 1000, pageSize: 25, currentStart: 501 };
+        const medium = buildPaginationItems({ ...options, maxSegments: maxSegmentsForWidth(950) });
+        const wide = buildPaginationItems({ ...options, maxSegments: maxSegmentsForWidth(1920) });
+        expect(wide.filter((item) => item.type === 'segment').length).toBeGreaterThan(medium.filter((item) => item.type === 'segment').length);
     });
 });

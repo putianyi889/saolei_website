@@ -1,14 +1,14 @@
 <template>
-    <nav class="base-pagination" :aria-label="t('local.pagination')" data-cy="pagination">
+    <nav ref="navRef" class="base-pagination" :aria-label="t('local.pagination')" data-cy="pagination">
         <div class="base-pagination__group" data-cy="nav-buttons">
-            <BaseButton class="square-button" size="small" :disabled="disabled || !canGoBack" :aria-label="t('local.first')" data-cy="first" @click="goTo(1)">
-                <template #icon>
-                    <i class="pi pi-angle-double-left" aria-hidden="true" />
-                </template>
-            </BaseButton>
             <BaseButton class="square-button" size="small" :disabled="disabled || !canGoBack" :aria-label="t('local.prev')" data-cy="prev" @click="goTo(previousStartValue)">
                 <template #icon>
                     <i class="pi pi-angle-left" aria-hidden="true" />
+                </template>
+            </BaseButton>
+            <BaseButton class="square-button" size="small" :disabled="disabled || !canGoForward" :aria-label="t('local.next')" data-cy="next" @click="goTo(nextStartValue)">
+                <template #icon>
+                    <i class="pi pi-angle-right" aria-hidden="true" />
                 </template>
             </BaseButton>
             <template v-for="(item, index) in items" :key="index">
@@ -17,16 +17,6 @@
                     {{ item.start }}-{{ item.end }}
                 </BaseButton>
             </template>
-            <BaseButton class="square-button" size="small" :disabled="disabled || !canGoForward" :aria-label="t('local.next')" data-cy="next" @click="goTo(nextStartValue)">
-                <template #icon>
-                    <i class="pi pi-angle-right" aria-hidden="true" />
-                </template>
-            </BaseButton>
-            <BaseButton class="square-button" size="small" :disabled="disabled || !canGoForward" :aria-label="t('local.last')" data-cy="last" @click="goTo(lastStart)">
-                <template #icon>
-                    <i class="pi pi-angle-double-right" aria-hidden="true" />
-                </template>
-            </BaseButton>
         </div>
         <div class="base-pagination__group" data-cy="settings">
             <label class="base-pagination__field">
@@ -49,13 +39,13 @@
 import '@/styles/pagination.css';
 import 'primeicons/primeicons.css';
 
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import BaseButton from './BaseButton.vue';
 import {
-    buildPaginationItems, canGoNext, clampStart, lastSegmentStart, nextStart,
-    normalizePageSize, normalizeTotal, previousStart, rangeFor,
+    buildPaginationItems, canGoNext, clampStart, maxSegmentsForWidth,
+    nextStart, normalizePageSize, normalizeTotal, previousStart, rangeFor,
 } from './pagination';
 import type { PaginationRange } from './pagination';
 
@@ -76,18 +66,38 @@ const normalizedTotal = computed(() => normalizeTotal(props.total));
 const effectivePageSize = computed(() => normalizePageSize(pageSize.value));
 const effectiveStart = computed(() => clampStart(currentStart.value, normalizedTotal.value));
 const range = computed(() => rangeFor(normalizedTotal.value, effectivePageSize.value, effectiveStart.value));
+const navRef = useTemplateRef<HTMLElement>('navRef');
+const availableWidth = ref(0);
+const maxSegments = computed(() => maxSegmentsForWidth(availableWidth.value));
 const items = computed(() => buildPaginationItems({
     total: normalizedTotal.value,
     pageSize: effectivePageSize.value,
     currentStart: effectiveStart.value,
+    maxSegments: maxSegments.value,
 }));
 const canGoBack = computed(() => normalizedTotal.value > 0 && effectiveStart.value > 1);
 const canGoForward = computed(() => canGoNext(range.value, normalizedTotal.value));
 const previousStartValue = computed(() => previousStart(effectiveStart.value, normalizedTotal.value, effectivePageSize.value));
 const nextStartValue = computed(() => nextStart(effectiveStart.value, normalizedTotal.value, effectivePageSize.value));
-const lastStart = computed(() => lastSegmentStart(normalizedTotal.value, effectivePageSize.value));
 
 const jumpValue = ref<string>(String(effectiveStart.value));
+
+let observer: ResizeObserver | undefined;
+
+onMounted(() => {
+    const nav = navRef.value;
+    if (nav === null) return;
+    availableWidth.value = nav.clientWidth;
+    observer = new ResizeObserver((entries) => {
+        const width = entries[0]?.contentRect.width;
+        if (width !== undefined) availableWidth.value = width;
+    });
+    observer.observe(nav);
+});
+
+onBeforeUnmount(() => {
+    observer?.disconnect();
+});
 
 watch([normalizedTotal, effectivePageSize, currentStart], () => {
     if (currentStart.value !== effectiveStart.value) currentStart.value = effectiveStart.value;
@@ -130,10 +140,8 @@ function commitJump() {
 const i18nMessages = {
     'zh-cn': { local: {
         pagination: '分页',
-        first: '首页',
         prev: '上一页',
         next: '下一页',
-        last: '末页',
         perPage: '每页',
         jump: '跳转',
         jumpStartIndex: '跳转到起始索引',
@@ -141,10 +149,8 @@ const i18nMessages = {
     } },
     en: { local: {
         pagination: 'Pagination',
-        first: 'First',
         prev: 'Previous',
         next: 'Next',
-        last: 'Last',
         perPage: 'Per page',
         jump: 'Jump',
         jumpStartIndex: 'Jump to start index',

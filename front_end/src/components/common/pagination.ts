@@ -1,6 +1,15 @@
 import { clamp } from '@/utils/math';
 
 export const DEFAULT_MAX_SEGMENTS = 5;
+export const PAGINATION_WIDE_MAX_SEGMENTS = 17;
+export const PAGINATION_FIXED_WIDTH = 180;
+export const PAGINATION_SEGMENT_WIDTH = 100;
+
+export function maxSegmentsForWidth(width: number): number {
+    if (!Number.isFinite(width) || width <= 0) return DEFAULT_MAX_SEGMENTS;
+    const budget = Math.floor((width - PAGINATION_FIXED_WIDTH) / PAGINATION_SEGMENT_WIDTH);
+    return clamp(budget, 1, PAGINATION_WIDE_MAX_SEGMENTS);
+}
 
 export interface PaginationRange {
     start: number;

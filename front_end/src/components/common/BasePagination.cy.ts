@@ -11,6 +11,7 @@ interface MountOptions {
     pageSize?: number;
     pageSizeOptions?: number[];
     disabled?: boolean;
+    width?: number;
 }
 
 function mountPagination(options: MountOptions = {}) {
@@ -20,22 +21,24 @@ function mountPagination(options: MountOptions = {}) {
     const changes: PaginationRange[] = [];
     cy.mount(defineComponent({
         expose: [],
-        render: () => h(BasePagination, {
-            total: total.value,
-            currentStart: currentStart.value,
-            pageSize: pageSize.value,
-            pageSizeOptions: options.pageSizeOptions,
-            disabled: options.disabled,
-            'onUpdate:currentStart': (value: number) => {
-                currentStart.value = value;
-            },
-            'onUpdate:pageSize': (value: number) => {
-                pageSize.value = value;
-            },
-            onChange: (range: PaginationRange) => {
-                changes.push(range);
-            },
-        }),
+        render: () => h('div', { style: `width: ${options.width ?? 700}px;` }, [
+            h(BasePagination, {
+                total: total.value,
+                currentStart: currentStart.value,
+                pageSize: pageSize.value,
+                pageSizeOptions: options.pageSizeOptions,
+                disabled: options.disabled,
+                'onUpdate:currentStart': (value: number) => {
+                    currentStart.value = value;
+                },
+                'onUpdate:pageSize': (value: number) => {
+                    pageSize.value = value;
+                },
+                onChange: (range: PaginationRange) => {
+                    changes.push(range);
+                },
+            }),
+        ]),
     }), { global: { plugins: [i18n] } });
     return { total, currentStart, pageSize, changes };
 }
@@ -54,18 +57,21 @@ function typeJump(value: string) {
 describe('<BasePagination />', () => {
     it('renders intervals, moves by page size and emits one change per action', () => {
         const { currentStart, changes } = mountPagination({ total: 100 });
+        cy.get('[data-cy=nav-buttons]').children().then(($children) => {
+            expect($children.eq(0).attr('data-cy')).to.equal('prev');
+            expect($children.eq(1).attr('data-cy')).to.equal('next');
+        });
         cy.get('[data-cy=report]').should('have.text', '1-25 / 100');
         cy.get('[data-cy=segment]').should('have.length', 4);
         cy.get('[data-cy=segment]').first().should('have.attr', 'aria-current', 'page');
         cy.get('[data-cy=next]').click();
         cy.get('[data-cy=report]').should('have.text', '26-50 / 100');
-        cy.get('[data-cy=last]').click();
+        cy.contains('[data-cy=segment]', '76-100').click();
         cy.get('[data-cy=report]').should('have.text', '76-100 / 100');
         cy.get('[data-cy=next]').should('be.disabled');
-        cy.get('[data-cy=last]').should('be.disabled');
         cy.get('[data-cy=prev]').click();
         cy.get('[data-cy=report]').should('have.text', '51-75 / 100');
-        cy.get('[data-cy=first]').click();
+        cy.contains('[data-cy=segment]', '1-25').click();
         cy.get('[data-cy=report]').should('have.text', '1-25 / 100');
         cy.get('[data-cy=prev]').should('be.disabled');
         cy.then(() => {
@@ -144,7 +150,7 @@ describe('<BasePagination />', () => {
         const { changes, currentStart } = mountPagination({ total: 0, currentStart: 50 });
         cy.get('[data-cy=report]').should('have.text', '0-0 / 0');
         cy.get('[data-cy=segment]').should('not.exist');
-        cy.get('[data-cy=first]').should('be.disabled');
+        cy.get('[data-cy=prev]').should('be.disabled');
         cy.get('[data-cy=next]').should('be.disabled');
         cy.get('[data-cy=jump]').should('be.disabled');
         cy.then(() => {
@@ -169,13 +175,42 @@ describe('<BasePagination />', () => {
 
     it('disables every control while keeping the report visible', () => {
         const { changes } = mountPagination({ total: 100, disabled: true });
-        cy.get('[data-cy=first]').should('be.disabled');
+        cy.get('[data-cy=prev]').should('be.disabled');
         cy.get('[data-cy=next]').should('be.disabled');
         cy.get('[data-cy=segment]').first().should('be.disabled');
         cy.get('[data-cy=page-size]').should('be.disabled');
         cy.get('[data-cy=jump]').should('be.disabled');
         cy.get('[data-cy=report]').should('be.visible');
         expectChanges(changes, []);
+    });
+
+    it('adjusts interval buttons as the container resizes', () => {
+        const start = ref<number>(501);
+        const width = ref<number>(700);
+        cy.mount(defineComponent({
+            expose: [],
+            render: () => h('div', { style: `width: ${width.value}px;` }, [
+                h(BasePagination, {
+                    total: 1000,
+                    currentStart: start.value,
+                    'onUpdate:currentStart': (value: number) => {
+                        start.value = value;
+                    },
+                }),
+            ]),
+        }), { global: { plugins: [i18n] } });
+        cy.get('[data-cy=segment]').should('have.length', 7);
+        cy.then(() => {
+            width.value = 300;
+        });
+        cy.get('[data-cy=segment]').should('have.length', 3);
+        cy.get('.base-pagination__ellipsis').should('have.length', 2);
+        cy.then(() => {
+            width.value = 1920;
+        });
+        cy.get('[data-cy=segment]').then(($buttons) => {
+            expect($buttons.length).to.be.greaterThan(7);
+        });
     });
 
     it('lets control groups wrap inside a narrow container', () => {
