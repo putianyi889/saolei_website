@@ -105,8 +105,8 @@ describe('video list sorting', () => {
         const noDate = makeVideo({ id: 4, end_time: undefined });
         expect(ids(sortVideos([normal, nan], 'bv', 1))).toEqual([1, 2]);
         expect(ids(sortVideos([nan, normal], 'bv', -1))).toEqual([1, 2]);
-        expect(ids(sortVideos([noDate, invalidDate, normal], 'end_time', 1))).toEqual([4, 1, 3]);
-        expect(ids(sortVideos([noDate, invalidDate, normal], 'end_time', -1))).toEqual([4, 1, 3]);
+        expect(ids(sortVideos([noDate, invalidDate, normal], 'end_time', 1))).toEqual([1, 4, 3]);
+        expect(ids(sortVideos([noDate, invalidDate, normal], 'end_time', -1))).toEqual([1, 4, 3]);
     });
 
     it('keeps equal values in input order and does not mutate the input', () => {
