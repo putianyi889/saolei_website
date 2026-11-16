@@ -1,0 +1,344 @@
+import json
+from typing import Annotated
+from urllib.parse import quote
+
+from django.conf import settings
+from django.core.files.storage import default_storage
+from django.db.models import F, Q
+from django.http import FileResponse, HttpRequest, HttpResponse
+from django.middleware.csrf import get_token
+from django.shortcuts import get_object_or_404
+from django.views.decorators.cache import cache_control
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django_ratelimit.decorators import ratelimit
+from ninja import Field, Form, Query, Router, Schema
+from ninja.decorators import decorate_view
+from ninja.errors import HttpError
+from ninja.orm import create_schema
+from ninja.security import django_auth, django_auth_superuser
+from pydantic import StrictInt, StringConstraints
+
+from config.text_choices import MS_TextChoices
+from userprofile.decorators import staff_required
+from userprofile.models import UserProfile
+from .cache import cache, newest_cache
+from .files import original_file
+from .models import ExpandVideoModel, VideoModel
+from .schema import ParsedVideoOut, PUBLIC_VIDEO_METADATA_FIELDS, PublicVideoMetadataOut, VIDEO_INFO_BATCH_LIMIT, VIDEO_METADATA_FIELDS, VideoBaseOut, VideoMetadataOut, VideoQueryOut
+from .services import delete_video_by_id, freeze_video_by_id, query_videos
+from .utils import replay_filename, unpack_compression_format, VIDEO_QUERY_ALLOWED_PARAMS, VideoQueryError
+
+router = Router()
+VIDEO_ACCEL_REDIRECT_PREFIX = '/internal-media/'
+VideoDeleteIn = create_schema(VideoModel, name='VideoDeleteIn', fields=['id'], custom_fields=[('id', Annotated[StrictInt, Field(gt=0, le=2**63 - 1)], ...)])
+VideoFreezeIn = create_schema(
+    VideoModel, name='VideoFreezeIn', fields=['id'],
+    custom_fields=[('id', Annotated[StrictInt, Field(gt=0, le=2**63 - 1)], ...), ('freeze_reason', Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, strict=True)], ...)],
+)
+VideoFreezeOut = create_schema(VideoModel, name='VideoFreezeOut', fields=['id', 'state'], custom_fields=[('freeze_reason', str, ...)])
+
+
+class VideoAdminAccessOut(Schema):
+    csrf_token: str
+
+
+class VideoDeleteOut(Schema):
+    id: int
+    deleted: bool
+    affected_tournament_ids: list[int]
+
+
+def _parse_video_ids(ids: str):
+    parts = ids.split(',')
+    if len(parts) > VIDEO_INFO_BATCH_LIMIT or not parts or any(len(part) > 19 or not part.isascii() or not part.isdecimal() or int(part) < 1 or int(part) > 2**63 - 1 for part in parts):
+        raise HttpError(400, f'Expected 1 to {VIDEO_INFO_BATCH_LIMIT} positive video IDs.')
+    return list(dict.fromkeys(map(int, parts)))
+
+
+def _visible_video_info(request, videos):
+    if request.user.is_authenticated:
+        return videos.filter(Q(ongoing_tournament=False) | Q(player_id=request.user.pk))
+    return videos.filter(ongoing_tournament=False)
+
+
+# Explicit groups keep Ninja's shared Operation.run wrapper from sharing endpoint quotas.
+@router.get('/staticdetailbatch', response=list[ParsedVideoOut])
+@decorate_view(ratelimit(group='video-staticdetailbatch', key='ip', rate='5/s'))
+def get_static_video_detail_batch(request, ids: str):
+    """
+    - ratelimit(group='video-staticdetailbatch', key='ip', rate='5/s')
+
+    Stable file-derived fields. Unpublished videos are only returned to their owner, including for staff requests.
+    """
+    videos = VideoModel.objects.filter(id__in=_parse_video_ids(ids))
+    return _visible_video_info(request, videos).select_related('video')
+
+
+@router.get('/abstractbulk', response=list[PublicVideoMetadataOut])
+@decorate_view(ratelimit(group='video-abstractbulk', key='ip', rate='1/2s'))
+def get_video_abstract_bulk(request, first: int, count: int):
+    """
+    - ratelimit(group='video-abstractbulk', key='ip', rate='1/2s')
+
+    Current website fields for public video IDs from `first` to `first + count - 1`. Count is capped at 10000.
+    Unpublished videos are skipped for all callers, including their owner and staff.
+    """
+    first = max(1, first)
+    count = max(1, min(10000, count))
+    return VideoModel.objects.filter(id__gte=first, id__lt=first + count, ongoing_tournament=False).only(*PUBLIC_VIDEO_METADATA_FIELDS)
+
+
+@router.get('/newest_queue', response=list[VideoMetadataOut])
+@decorate_view(ratelimit(key='ip', rate='5/s'))
+def get_newest_queue(request):
+    """
+    - ratelimit(key='ip', rate='5/s')
+
+    Read public queue metadata directly from the cached snapshot, without querying videos.
+    """
+    videos = []
+    for video_id, raw in cache.hgetall(newest_cache.key).items():
+        cached = json.loads(raw)
+        videos.append({
+            'id': int(video_id), 'player_id': cached['player_id'], 'upload_time': cached['time'],
+            'state': cached['state'], 'ongoing_tournament': False,
+        })
+    return videos
+
+
+@router.post('/newest_queue/remove', response={204: None})
+@decorate_view(staff_required)
+def remove_newest_queue_video(request, video_id: int = Form(..., alias='id')):  # noqa: B008
+    """
+    - staff_required
+    """
+    cache.hdel(newest_cache.key, video_id)
+    return 204, None
+
+
+@router.get('/query', response=VideoQueryOut)
+@decorate_view(ratelimit(group='video-query', key='ip', rate='1/5s', block=True))
+def video_query(request, filters: str = '[]', sorts: str = '[]'):
+    """
+    - ratelimit(group='video-query', key='ip', rate='1/5s', block=True)
+
+    Filter and sort videos by whitelisted fields; returns at most 1000 website metadata rows.
+    """
+    if set(request.GET) - VIDEO_QUERY_ALLOWED_PARAMS:
+        raise HttpError(400, 'Unknown query parameters.')
+    base_qs = VideoModel.objects.filter(ongoing_tournament=False)
+    try:
+        rows = query_videos(base_qs, filters, sorts)
+    except VideoQueryError as exc:
+        raise HttpError(400, str(exc)) from exc
+    players = UserProfile.objects.in_bulk({row['player_id'] for row in rows})
+    for row in rows:
+        row['player__realname'] = players[row['player_id']].realname
+    return {'videos': rows}
+
+
+@router.get('/admin/detail/{video_id}')
+@decorate_view(staff_required)
+def get_video_admin(request, video_id: int):
+    """
+    - staff_required
+    """
+    fields = ['id', 'player', 'upload_time', 'state', 'software', 'level', 'mode', 'right_ce', 'timems', 'bv', 'bvs', 'ongoing_tournament']
+    fields.extend('video__' + field.name for field in ExpandVideoModel._meta.get_fields())
+    row = VideoModel.objects.filter(pk=video_id).values(*fields, player__realname=F('player___realname')).first()
+    if row is None:
+        raise HttpError(404, 'Video not found.')
+    return row
+
+
+@router.get('/admin/freeze', auth=django_auth, response=VideoAdminAccessOut)
+@decorate_view(staff_required, ensure_csrf_cookie, cache_control(no_store=True))
+def get_video_freeze_access(request: HttpRequest):
+    """
+    - auth=django_auth (Django session)
+    - staff_required
+    - ensure_csrf_cookie
+    - cache_control(no_store=True)
+
+    Check staff access and initialize the CSRF cookie and request token for freezing a video.
+    """
+    return {'csrf_token': get_token(request)}
+
+
+@router.post('/admin/freeze', auth=django_auth, response=VideoFreezeOut)
+@decorate_view(staff_required)
+def freeze_video_admin(request: HttpRequest, data: VideoFreezeIn):
+    """
+    - auth=django_auth (Django session, CSRF required)
+    - staff_required
+
+    Freeze one video and save a nonblank reason. Repeating the request updates the reason.
+    State-change signals update queues and rankings; the file and upload time are preserved.
+    """
+    try:
+        return freeze_video_by_id(data.id, data.freeze_reason, actor_id=request.user.pk)
+    except VideoModel.DoesNotExist:
+        raise HttpError(404, 'Video not found.')
+
+
+@router.post('/admin/delete', auth=django_auth_superuser, response=VideoDeleteOut)
+def delete_video_admin(request: HttpRequest, data: VideoDeleteIn):
+    """
+    - auth=django_auth_superuser (Django session, superuser only, CSRF required)
+
+    Delete one video using a JSON object, e.g. {"id": 123}. The ID must be a positive integer.
+    A missing video returns deleted=false, allowing a caller to reconcile a previous uncertain response.
+    Database deletion is atomic. Clients may send multiple requests sequentially and stop on any error.
+    Existing deletion signals clean up expansions, files and rankings. The newest queue retains its snapshots.
+
+    Warning: tournament videos become unavailable, but saved tournament results are not recalculated.
+    Later explicit recalculation follows each tournament type and score source. Affected tournament IDs
+    are returned and logged as a warning; private notifications are not implemented yet.
+    """
+    return delete_video_by_id(data.id, actor_id=request.auth.pk)
+
+
+@router.get('/admin/delete', auth=django_auth_superuser, response=VideoAdminAccessOut)
+@decorate_view(ensure_csrf_cookie, cache_control(no_store=True))
+def get_video_delete_access(request: HttpRequest):
+    """
+    - auth=django_auth_superuser (Django session, superuser only)
+    - ensure_csrf_cookie
+    - cache_control(no_store=True)
+
+    Check access to the hidden video deletion page and initialize its CSRF cookie and request token.
+    """
+    return {'csrf_token': get_token(request)}
+
+
+@router.get('/query_by_id')
+@decorate_view(ratelimit(key='ip', rate='60/m'))
+def video_query_by_id(request, user_id: int = Query(..., alias='id')):  # noqa: B008
+    """
+    - ratelimit(key='ip', rate='60/m')
+    """
+    user = get_object_or_404(UserProfile, id=user_id)
+    videos = VideoModel.objects.filter(player=user)
+    if request.user != user:
+        videos = videos.filter(ongoing_tournament=False)
+    # Self-contained export endpoint, also used outside the website.
+    return list(videos.values(
+        'id', 'upload_time', 'end_time', 'level', 'mode', 'timems', 'bv', 'bvs', 'state', 'video__identifier',
+        'software', 'right_ce', 'flag', 'cell0', 'cell1', 'cell2', 'cell3', 'cell4', 'cell5', 'cell6', 'cell7', 'cell8', 'left', 'right', 'double', 'op', 'isl', 'path', 'pluck',
+    ))
+
+
+def _can_request_video(request: HttpRequest, video: VideoModel):
+    if not video.ongoing_tournament:
+        return True
+    if not request.user.is_authenticated:
+        return False
+    return request.user.id == video.player_id
+
+
+def _video_file_response(request: HttpRequest, video_id: int, *, decompress=False):
+    video = get_object_or_404(VideoModel, id=video_id)
+    if not _can_request_video(request, video):
+        raise HttpError(403, 'Forbidden.')
+    file_name = video.file.name
+    try:
+        if decompress and video.compression_format:
+            with original_file(file_name, video.compression_format, video.original_filename) as source:
+                response = HttpResponse(source.read(), headers={'Content-Length': str(source.size)})
+        elif settings.DEBUG:
+            response = FileResponse(default_storage.open(file_name, 'rb'))
+        else:
+            response = HttpResponse()
+            response['X-Accel-Redirect'] = f'{VIDEO_ACCEL_REDIRECT_PREFIX}{quote(file_name, safe="/")}'
+    except FileNotFoundError:
+        raise HttpError(404, 'Video file not found.')
+    response['Content-Type'] = 'application/octet-stream'
+    filename = replay_filename(file_name, video.original_filename)
+    if video.compression_format and not decompress:
+        filename += '.msrc'
+    file_name_uri = quote(filename)
+    response['Content-Disposition'] = f'attachment; filename="{file_name_uri}"'
+    response['X-Replay-Container-Version'] = '0' if decompress else str(unpack_compression_format(video.compression_format)[0])
+    return response
+
+
+VideoFullOut = create_schema(
+    VideoModel,
+    fields=[
+        'id', 'player',
+        'software', 'level', 'mode', 'state',
+        'timems', 'bv', 'path', 'flag', 'op', 'isl',
+        'upload_time', 'end_time', 'file_size',
+        'left', 'right', 'double', 'cl',
+        'left_ce', 'right_ce', 'double_ce', 'ce',
+        'cell0', 'cell1', 'cell2', 'cell3', 'cell4', 'cell5', 'cell6', 'cell7', 'cell8',
+    ],
+    custom_fields=[
+        ('video__identifier', str, ''),
+        ('cl', int | None, None),
+        ('ce', int | None, None),
+    ],
+)
+
+
+@router.get('/preview')
+@decorate_view(ratelimit(key='ip', rate='20/m'))
+def video_preview(request: HttpRequest, video_id: int = Query(..., alias='id')):  # noqa: B008
+    """
+    - ratelimit(key='ip', rate='20/m')
+
+    按录像 ID 返回当前存储的文件，已压缩录像返回 MSRC 容器，未压缩录像返回原始字节。
+    """
+    return _video_file_response(request, video_id)
+
+
+@router.get('/download/{video_id}')
+@decorate_view(ratelimit(key='ip', rate='5/m'))
+def video_download(request: HttpRequest, video_id: int):
+    """
+    - ratelimit(key='ip', rate='5/m')
+
+    按录像 ID 返回原始录像文件，MSRC 容器在后端解压，文件名保留原软件后缀。
+    """
+    return _video_file_response(request, video_id, decompress=True)
+
+
+@router.get('/review_queue', response=list[VideoMetadataOut])
+@decorate_view(ratelimit(key='ip', rate='1/s'))
+def get_review_queue(request):
+    """
+    - ratelimit(key='ip', rate='1/s')
+    """
+    videos = VideoModel.objects.filter(state=MS_TextChoices.State.PLAIN)
+    if not request.user.is_staff:
+        videos = videos.filter(ongoing_tournament=False)
+
+    return videos.only(*VIDEO_METADATA_FIELDS)
+
+
+@router.get('/infobulk', response=list[VideoBaseOut])
+@decorate_view(ratelimit(group='video-infobulk', key='ip', rate='1/s'))
+def get_video_info_bulk(request, first: int, count: int):
+    """
+    - ratelimit(group='video-infobulk', key='ip', rate='1/s')
+
+    Video id from `first` to `first + count - 1`. Hidden videos are skipped. Count is capped at 2000.
+    """
+    first = max(1, first)
+    count = max(1, min(2000, count))
+
+    return VideoModel.objects.filter(id__gte=first, id__lt=first + count, ongoing_tournament=False)
+
+
+@router.get('/detailbulk', response=list[VideoFullOut])
+@decorate_view(ratelimit(group='video-detailbulk', key='ip', rate='1/s'))
+def get_video_detail_bulk(request, first: int, count: int):
+    """
+    - ratelimit(group='video-detailbulk', key='ip', rate='1/s')
+
+    Video id from `first` to `first + count - 1`. Hidden videos are skipped. Count is capped at 500.
+    """
+    first = max(1, first)
+    count = max(1, min(500, count))
+
+    return VideoModel.objects.filter(id__gte=first, id__lt=first + count, ongoing_tournament=False)

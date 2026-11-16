@@ -1,0 +1,26 @@
+name: Front-end Code Style Check
+
+on:
+  push:
+    branches:
+      - main  # Adjust the branch name as needed
+  pull_request:
+    paths: 
+      - 'front_end/**'
+      - '.github/workflows/eslint.yml'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: front_end
+    steps:
+      - uses: actions/checkout@v7
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm install
+      - run: npm run lint
+      - run: npm run typecheck

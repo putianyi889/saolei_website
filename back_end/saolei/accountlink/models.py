@@ -1,11 +1,29 @@
 # -*- coding: utf-8 -*-
 from django.db import models
+
+from config.text_choices import MS_TextChoices
 from userprofile.models import UserProfile
+from videomanager.models import VideoModel
+from .msgames.utils import supports_replay
+from .wom.utils import ENDURANCE_BASE_MS
+
 
 class Platform(models.TextChoices):
+    BILIBILI = 'B', ('Bilibili')
+    DISCORD = 'd', ('Discord')
     MSGAMES = 'a', ('Authoritative Minesweeper')
+    MINERACER = 'm', ('Mineracer')
+    QQ = 'q', ('腾讯QQ')
     SAOLEI = 'c', ('扫雷网')
     WOM = 'w', ('Minesweeper.Online')
+    CLASSIC = 'x', ('95经典扫雷')
+    GITHUB = 'g', ('GitHub')
+
+
+MINERACER_USERID_MAX_LENGTH = 64
+CLASSIC_USERID_MIN = 10000000
+CLASSIC_USERID_MAX = 99999999
+
 
 # 用于验证的队列
 class AccountLinkQueue(models.Model):
@@ -14,63 +32,91 @@ class AccountLinkQueue(models.Model):
     userprofile = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
     verified = models.BooleanField(default=False)
 
-# 网站编码 website code
-# a - Authoritative Minesweeper
-# c - China ranking (saolei.wang)
-# g - Minesweeper GO
-# l - League of Minesweeper
-# s - Scoreganizer
-# w - World of Minesweeper
-# B - Bilibili
-# D - Discord
-# F - Facebook
-# G - GitHub
-# R - Reddit
-# S - Speedrun.com
-# T - Tieba
-# W - Weibo
-# X - X
-# Y - YouTube
-# Z - Zhihu
+    class Meta:
+        indexes = [models.Index(fields=['platform', 'identifier'], name='accountlink_platform_id_idx')]
+
 
 # 扫雷网账号信息
 class AccountSaolei(models.Model):
     id = models.PositiveIntegerField(primary_key=True)
     parent = models.OneToOneField(UserProfile, on_delete=models.CASCADE, related_name='account_saolei')
-    update_time = models.DateTimeField(auto_now=True)
+    update_time = models.DateTimeField(auto_now_add=True)
 
-    name = models.CharField(max_length=10, default="") # 姓名，10应该够了吧
-    total_views = models.PositiveIntegerField(null=True) # 综合人气
+    name = models.CharField(max_length=128, default='')
+    banned = models.BooleanField(default=False)
+    video_sync_cursor = models.PositiveBigIntegerField(default=0)
+    video_update_time = models.DateTimeField(null=True)
+    auto_sync = models.BooleanField(default=True, help_text='每天自动增量同步扫雷网资料、录像目录及未完成的录像。')
 
-    beg_count = models.PositiveSmallIntegerField(null=True) # 初级录像数量
-    int_count = models.PositiveSmallIntegerField(null=True) # 中级录像数量
-    exp_count = models.PositiveSmallIntegerField(null=True) # 高级录像数量
 
-    # time纪录，单位毫秒
-    b_t_ms = models.PositiveIntegerField(null=True)
-    i_t_ms = models.PositiveIntegerField(null=True)
-    e_t_ms = models.PositiveIntegerField(null=True)
-    s_t_ms = models.PositiveIntegerField(null=True)
+class SaoleiApiVideo(models.Model):
+    remote_id = models.PositiveBigIntegerField(unique=True)
+    user = models.ForeignKey(AccountSaolei, on_delete=models.CASCADE, related_name='videos')
+    upload_time = models.DateTimeField()
+    level = models.CharField(
+        max_length=1,
+        choices=[
+            (MS_TextChoices.Level.BEGINNER, MS_TextChoices.Level.BEGINNER.label),
+            (MS_TextChoices.Level.INTERMEDIATE, MS_TextChoices.Level.INTERMEDIATE.label),
+            (MS_TextChoices.Level.EXPERT, MS_TextChoices.Level.EXPERT.label),
+        ],
+    )
+    bv = models.PositiveSmallIntegerField(default=0)
+    timems = models.PositiveIntegerField(default=0)
+    nf = models.BooleanField(default=False)
+    software = models.TextField()
+    status = models.IntegerField()
+    import_video = models.OneToOneField(VideoModel, on_delete=models.SET_NULL, null=True)
+    import_rejected = models.BooleanField(default=False, help_text='本站文件校验已拒收，后续同步不再下载；人工清除后才重试。')
 
-    # bvs纪录，单位0.01。大概不会有人bvs超过300吧？大概吧？
-    b_b_cent = models.PositiveSmallIntegerField(null=True)
-    i_b_cent = models.PositiveSmallIntegerField(null=True)
-    e_b_cent = models.PositiveSmallIntegerField(null=True)
-    s_b_cent = models.PositiveSmallIntegerField(null=True)
 
 class AccountMinesweeperGames(models.Model):
     id = models.PositiveIntegerField(primary_key=True)
     parent = models.OneToOneField(UserProfile, on_delete=models.CASCADE, related_name='account_msgames')
     update_time = models.DateTimeField(auto_now=True)
 
-    name = models.CharField(max_length=128, default="")
-    local_name = models.CharField(max_length=128, default="")
-    # country = models.CharField() # country和state应该是二合一的枚举类型
-    # state = models.CharField()
+    name = models.CharField(max_length=128, default='')
+    local_name = models.CharField(max_length=128, default='')
+    country = models.TextField(default='', blank=True, help_text='Public country text as displayed by MSGames, without an enum.')
+    state = models.TextField(default='', blank=True, help_text='Public region text as displayed by MSGames, without an enum.')
     joined = models.DateField(null=True)
-    # mouse_brand = models.CharField(max_length=128) # 枚举
-    # mouse_type = models.CharField(max_length=128) # 枚举
-    # mouse_model = models.CharField() # 用户自己随便填的，需要审查
+    hand = models.TextField(default='', blank=True, help_text='Public handedness text as displayed by MSGames.')
+    mouse = models.TextField(default='', blank=True, help_text='Public mouse text as displayed by MSGames.')
+    video_update_time = models.DateTimeField(null=True)
+
+
+class VideoMSGames(models.Model):
+    user = models.ForeignKey(AccountMinesweeperGames, on_delete=models.CASCADE, related_name='videos')
+    source_key = models.CharField(max_length=64, unique=True, help_text='SHA-256 of the original replay URL, used for deduplication.')
+    url = models.TextField(help_text='Original replay URL published by MSGames.')
+    filename = models.TextField()
+    upload_date = models.DateField(null=True, help_text='Public upload date; imports use the following midnight UTC as its upper bound.')
+    category = models.TextField(default='', help_text='Displayed metric, groups, style and category, merged across score histories.')
+    score = models.TextField(default='', help_text='Displayed score strings, preserving source precision.')
+    density_levels = models.JSONField(default=list, help_text='Density custom levels; null entries denote unsupported or unknown configurations.')
+    import_video = models.ForeignKey(VideoModel, on_delete=models.SET_NULL, null=True, related_name='+')
+
+    @property
+    def can_import(self):
+        return supports_replay(self.filename, self.category, self.density_levels)
+
+
+class AccountBilibili(models.Model):
+    id = models.PositiveBigIntegerField(primary_key=True, verbose_name='Bilibili UID', help_text='Numeric Bilibili user ID from space.bilibili.com/{uid}.')
+    parent = models.OneToOneField(UserProfile, on_delete=models.CASCADE, related_name='account_bilibili', verbose_name='OpenMS user', help_text='OpenMS user linked to this Bilibili account.')
+    update_time = models.DateTimeField(auto_now=True, verbose_name='Update time', help_text='Time when public Bilibili profile data was last synchronized.')
+
+    name = models.CharField(max_length=128, default='', verbose_name='Display name', help_text='Public Bilibili display name.')
+    face = models.URLField(max_length=500, default='', verbose_name='Avatar URL', help_text='Public Bilibili avatar URL.')
+    sign = models.TextField(default='', verbose_name='Signature', help_text='Public Bilibili profile signature.')
+    level = models.PositiveSmallIntegerField(default=0, help_text='Bilibili user level.')
+    following = models.PositiveIntegerField(default=0, verbose_name='Following count')
+    follower = models.PositiveIntegerField(default=0, verbose_name='Follower count')
+    video_count = models.PositiveIntegerField(default=0, help_text='Number of public video submissions by this Bilibili account.')
+    article_count = models.PositiveIntegerField(default=0, help_text='Number of public article submissions by this Bilibili account.')
+    opus_count = models.PositiveIntegerField(default=0, help_text='Number of public opus/dynamic posts by this Bilibili account.')
+    official_title = models.CharField(max_length=128, default='', verbose_name='Official title', help_text='Bilibili official verification title, or an empty string when unverified.')
+
 
 class AccountWorldOfMinesweeper(models.Model):
     id = models.PositiveIntegerField(primary_key=True)
@@ -82,16 +128,8 @@ class AccountWorldOfMinesweeper(models.Model):
     trophy = models.PositiveSmallIntegerField(null=True)
 
     experience = models.PositiveIntegerField(null=True)
-    honour = models.PositiveIntegerField(null=True)
 
-    minecoin = models.PositiveIntegerField(null=True)
-    gem = models.PositiveIntegerField(null=True)
-    coin = models.PositiveIntegerField(null=True)
-    arena_ticket = models.PositiveIntegerField(null=True)
-    equipment = models.PositiveIntegerField(null=True)
-    part = models.PositiveIntegerField(null=True)
-    
-    arena_point = models.PositiveSmallIntegerField(null=True) # 最高80
+    arena_point = models.PositiveSmallIntegerField(null=True)  # 最高80
     max_difficulty = models.PositiveIntegerField(null=True)
     win = models.PositiveIntegerField(null=True)
     last_season = models.PositiveSmallIntegerField(null=True)
@@ -112,7 +150,147 @@ class AccountWorldOfMinesweeper(models.Model):
     i_winstreak = models.PositiveSmallIntegerField(null=True)
     e_winstreak = models.PositiveSmallIntegerField(null=True)
 
-    # 主页只显示一个
-    # b_endurance = models.TimeField()
-    # i_endurance = models.TimeField()
-    # e_endurance = models.TimeField()
+    b_endurance_ms = models.PositiveIntegerField(default=ENDURANCE_BASE_MS, null=False, help_text='Best beginner endurance time in milliseconds; 86400000 when no record.')
+    i_endurance_ms = models.PositiveIntegerField(default=ENDURANCE_BASE_MS, null=False, help_text='Best intermediate endurance time in milliseconds; 86400000 when no record.')
+    e_endurance_ms = models.PositiveIntegerField(default=ENDURANCE_BASE_MS, null=False, help_text='Best expert endurance time in milliseconds; 86400000 when no record.')
+
+    b_ng_t_ms = models.PositiveIntegerField(null=True, help_text='Beginner no-guess personal-best time in milliseconds.')
+    i_ng_t_ms = models.PositiveIntegerField(null=True, help_text='Intermediate no-guess personal-best time in milliseconds.')
+    e_ng_t_ms = models.PositiveIntegerField(null=True, help_text='Expert no-guess personal-best time in milliseconds.')
+
+    b_win = models.PositiveIntegerField(null=True, help_text='Total beginner wins.')
+    i_win = models.PositiveIntegerField(null=True, help_text='Total intermediate wins.')
+    e_win = models.PositiveIntegerField(null=True, help_text='Total expert wins.')
+    b_ng_win = models.PositiveIntegerField(null=True, help_text='Total beginner no-guess wins.')
+    i_ng_win = models.PositiveIntegerField(null=True, help_text='Total intermediate no-guess wins.')
+    e_ng_win = models.PositiveIntegerField(null=True, help_text='Total expert no-guess wins.')
+
+    experience_total = models.PositiveIntegerField(null=True, help_text='Lifetime experience earned (expAll), distinct from current experience.')
+    minecoin_total = models.PositiveIntegerField(null=True, help_text='Lifetime minecoins earned (coinsAll), not current inventory.')
+    gem_total = models.PositiveIntegerField(null=True, help_text='Lifetime gems earned (gemsAll), not current inventory.')
+    arena_coin_total = models.PositiveIntegerField(null=True, help_text='Lifetime arena coins earned (arenaCoinsAll), not current inventory.')
+    game_count = models.PositiveIntegerField(null=True, help_text='Public game count (games).')
+    win_nf = models.PositiveIntegerField(null=True, help_text='Lifetime wins without flags (winsNf); no-flag and no-guess are different modes.')
+    play_time_ms = models.PositiveBigIntegerField(null=True, help_text='Lifetime play time in milliseconds (timeAll).')
+    arena_play_time_ms = models.PositiveBigIntegerField(null=True, help_text='Lifetime arena play time in milliseconds (arenaDuration).')
+    bbbv_total = models.PositiveIntegerField(null=True, help_text='Lifetime 3BV total (bbbvAll).')
+    season_count = models.PositiveSmallIntegerField(null=True, help_text='Number of seasons played (seasons), with one season per month.')
+
+
+class AccountDiscord(models.Model):
+    id = models.CharField(max_length=20, primary_key=True, help_text='Discord snowflake, serialized as a string without JavaScript precision loss.')
+    parent = models.OneToOneField(UserProfile, on_delete=models.CASCADE, related_name='account_discord')
+
+
+class AccountMineracer(models.Model):
+    id = models.CharField(max_length=MINERACER_USERID_MAX_LENGTH, primary_key=True, verbose_name='Mineracer Userid', help_text='Up to 64-character Mineracer Userid.')
+    parent = models.OneToOneField(UserProfile, on_delete=models.CASCADE, related_name='account_mineracer', verbose_name='OpenMS user', help_text='OpenMS user linked to this Mineracer account.')
+    update_time = models.DateTimeField(auto_now=True, verbose_name='Update time', help_text='Time when this Mineracer account link was last updated.')
+
+
+class AccountClassicMinesweeper(models.Model):
+    id = models.PositiveBigIntegerField(primary_key=True, verbose_name='95 Classic UID', help_text='8-digit player UID shown in the 95 Classic Minesweeper mini game.')
+    parent = models.OneToOneField(UserProfile, on_delete=models.CASCADE, related_name='account_classic', verbose_name='OpenMS user', help_text='OpenMS user linked to this 95 Classic Minesweeper account.')
+    update_time = models.DateTimeField(auto_now=True, verbose_name='Update time', help_text='Time when this 95 Classic Minesweeper account link was last updated.')
+
+
+# 玩家在小游戏内勾选后，对方一次性推送 EVF 文件；key 全局唯一，syncId 用于重试幂等。
+class ClassicReplay(models.Model):
+    sync_id = models.PositiveBigIntegerField(unique=True, help_text='X-Ext-Sync-Id；重复推送（重试）时不变。')
+    uid = models.PositiveBigIntegerField(verbose_name='95 Classic UID', help_text='推送时玩家的 8 位 UID。')
+    key = models.CharField(max_length=64, unique=True, help_text='<赛季>-<录像id>，对方保证全局唯一；同一 key 换 syncId 覆盖同一行。')
+    season = models.PositiveIntegerField(help_text='赛季编码，来自 X-Ext-Season。')
+    platform = models.CharField(max_length=8, help_text='mobile / pc。')
+    difficulty = models.CharField(
+        max_length=1,
+        choices=[
+            (MS_TextChoices.Level.BEGINNER, MS_TextChoices.Level.BEGINNER.label),
+            (MS_TextChoices.Level.INTERMEDIATE, MS_TextChoices.Level.INTERMEDIATE.label),
+            (MS_TextChoices.Level.EXPERT, MS_TextChoices.Level.EXPERT.label),
+        ],
+        help_text='b / i / e（初 / 中 / 高），由 X-Ext-Difficulty 映射。',
+    )
+    played_at = models.DateTimeField(help_text='对局时间，来自 X-Ext-Played-At（毫秒）。')
+    time_ms = models.PositiveIntegerField(help_text='成绩用时（毫秒）。')
+    bv3 = models.PositiveSmallIntegerField(help_text='3BV。')
+    nf = models.BooleanField(default=False, help_text='本局无旗（NF）。')
+    sha256 = models.CharField(max_length=64, help_text='EVF 文件的 SHA-256（hex）。')
+    file_size = models.PositiveIntegerField(default=0)
+
+    import_video = models.ForeignKey(VideoModel, on_delete=models.SET_NULL, null=True, related_name='+', help_text='导入后的本站录像；为空表示尚未导入，可再次推送重试。')
+    error_category = models.CharField(max_length=32, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+# 95经典扫雷的绑定需玩家在小游戏内确认，requestId 由对方签发，回调按它幂等。
+class ClassicBindRequest(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'pending', ('Pending')
+        ALLOWED = 'allow', ('Allowed')
+        DENIED = 'deny', ('Denied')
+        REVOKED = 'revoke', ('Revoked')
+        EXPIRED = 'expired', ('Expired')
+        CONFLICT = 'conflict', ('Conflict')
+
+    request_id = models.PositiveBigIntegerField(unique=True, help_text='requestId returned by 95 Classic Minesweeper, reused as the callback idempotency key.')
+    uid = models.PositiveBigIntegerField(unique=True, verbose_name='95 Classic UID', help_text='One row per player UID; a new request overwrites the previous outcome.')
+    userprofile = models.ForeignKey(UserProfile, on_delete=models.CASCADE, related_name='classic_bind_requests')
+    account = models.CharField(max_length=128, help_text='OpenMS username sent to the remote app and echoed back in callbacks.')
+    status = models.CharField(max_length=8, choices=Status.choices, default=Status.PENDING)
+    expires_at = models.DateTimeField()
+    error_category = models.CharField(max_length=32, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    handled_at = models.DateTimeField(null=True)
+
+
+# 使用QQ互联提供的登录接口需要开发者注册，步骤繁琐，不利于去中心化
+class AccountGitHub(models.Model):
+    id = models.PositiveBigIntegerField(primary_key=True)
+    parent = models.OneToOneField(UserProfile, on_delete=models.CASCADE, related_name='account_github')
+
+
+class AccountQQ(models.Model):
+    id = models.PositiveBigIntegerField(primary_key=True)
+    parent = models.OneToOneField(UserProfile, on_delete=models.CASCADE, related_name='account_qq')
+
+
+PLATFORM_CONFIG = {
+    Platform.GITHUB: {
+        'model': AccountGitHub,
+        'related_name': 'account_github',
+    },
+    Platform.DISCORD: {
+        'model': AccountDiscord,
+        'related_name': 'account_discord',
+    },
+    Platform.BILIBILI: {
+        'model': AccountBilibili,
+        'related_name': 'account_bilibili',
+    },
+    Platform.MSGAMES: {
+        'model': AccountMinesweeperGames,
+        'related_name': 'account_msgames',
+    },
+    Platform.MINERACER: {
+        'model': AccountMineracer,
+        'related_name': 'account_mineracer',
+    },
+    Platform.CLASSIC: {
+        'model': AccountClassicMinesweeper,
+        'related_name': 'account_classic',
+    },
+    Platform.SAOLEI: {
+        'model': AccountSaolei,
+        'related_name': 'account_saolei',
+    },
+    Platform.WOM: {
+        'model': AccountWorldOfMinesweeper,
+        'related_name': 'account_wom',
+    },
+    Platform.QQ: {
+        'model': AccountQQ,
+        'related_name': 'account_qq',
+    },
+}

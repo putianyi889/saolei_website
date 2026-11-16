@@ -1,22 +1,23 @@
 <template>
-    <el-table-column :label="$t('common.prop.realName')" v-slot="scope" width="auto">
+    <ElTableColumn v-slot="scope" :label="t('prop.realName')" width="auto">
         <span class="nobr">
-            <PlayerName class="name" :user_id="scope.row.player__id" :user_name="scope.row.player__realname" />
+            <PlayerName class="name" :user-id="scope.row.player__id" />
         </span>
-    </el-table-column>
+    </ElTableColumn>
 </template>
 
 <script setup lang="ts">
+import { ElTableColumn } from 'element-plus';
+import { useI18n } from 'vue-i18n';
 
-import PlayerName from '../PlayerName.vue';
+import PlayerName from '@/components/PlayerName.vue';
 
+const { t } = useI18n();
 </script>
 
 <style lang="less">
-
 .nobr {
     white-space: nowrap;
     hyphens: none;
 }
-
 </style>

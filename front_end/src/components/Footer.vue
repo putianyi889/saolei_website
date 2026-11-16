@@ -1,51 +1,86 @@
 <template>
-    <el-divider />
-    <el-footer>
-        <el-row style="margin-bottom: 15px">
-            <el-col :span="8">
-                <div style="padding-bottom: 5px"><strong>
-                    {{ $t('footer.about') }}
-                </strong></div>
-                <Thanks />
-                <!-- <div><el-link href="https://github.com/eee555/Solvable-Minesweeper">{{ $t('common.software.metasweeper')
-                        }}</el-link></div> -->
-                <div style="padding-bottom: 5px; margin-top: 8px;"><strong>
-                    {{ $t('common.software.resource_download') }}
-                </strong></div>
-                <Downloads />
-            </el-col>
-            <el-col :span="8">
-                <div style="padding-bottom: 5px"><strong>{{ $t('footer.contact') }}</strong></div>
-                <div><el-link href="https://github.com/eee555/saolei_website" target="_blank">GitHub</el-link></div>
-                <div><el-link href="https://gitee.com/ee55/saolei_website" target="_blank">Gitee</el-link></div>
-                <div><el-link href="https://discord.gg/ks8ngPX5bT" target="_blank">Discord</el-link></div>
-                <div><el-link href="https://qm.qq.com/q/hNShGUQkJG" target="_blank">QQ</el-link></div>
-            </el-col>
-            <el-col :span="8">
-                <div style="padding-bottom: 5px"><strong>{{ $t('footer.links') }}</strong></div>
-                <div><el-link href="http://saolei.wang" target="_blank">扫雷网 saolei.wang</el-link></div>
-                <div><el-link href="https://minesweepergame.com" target="_blank">Authoritative Minesweeper</el-link>
+    <footer class="site-footer">
+        <div style="margin-bottom: 15px">
+            <div>
+                <div style="padding-bottom: 5px">
+                    <strong>{{ t('local.links') }}</strong>
                 </div>
-                <div><el-link href="https://minesweeper.online" target="_blank">Minesweeper.Online</el-link></div>
-                <div><el-link href="http://tapsss.com" target="_blank">扫雷联萌 League of Minesweeper</el-link></div>
-                <div><el-link href="https://scoreganizer.net" target="_blank">Scoreganizer</el-link></div>
-            </el-col>
-        </el-row>
-        <div style="text-align: center">
-            <el-text style="vertical-align: middle">Copyright @ 2023　</el-text>
-            <el-link href="http://fff666.top">开源扫雷网 fff666.top</el-link>
-            <el-text style="vertical-align: middle">　版权所有　</el-text>
-            <el-link href="https://beian.miit.gov.cn/">苏ICP备2023056839号-1</el-link>
-            <span style="width: 12px; display: inline-block"></span>
-            <el-link href="https://beian.mps.gov.cn/#/query/webSearch?code=32020602001691" rel="noreferrer"
-                target="_blank">苏公网安备32020602001691</el-link>
+                <div>
+                    <a class="link text" href="https://mineracer.com/" target="_blank" rel="noopener noreferrer">
+                        Mineracer
+                    </a>
+                </div>
+                <div>
+                    <a class="link text" href="http://saolei.wang" target="_blank" rel="noopener noreferrer">
+                        扫雷网 saolei.wang
+                    </a>
+                </div>
+                <div>
+                    <a class="link text" href="https://minesweepergame.com" target="_blank" rel="noopener noreferrer">
+                        Authoritative Minesweeper
+                    </a>
+                </div>
+                <div>
+                    <a class="link text" href="https://minesweeper.online" target="_blank" rel="noopener noreferrer">
+                        Minesweeper.Online
+                    </a>
+                </div>
+                <div>
+                    <a class="link text" href="http://tapsss.com" target="_blank" rel="noopener noreferrer">
+                        扫雷联萌 League of Minesweeper
+                    </a>
+                </div>
+                <div>
+                    <a class="link text" href="https://scoreganizer.net" target="_blank" rel="noopener noreferrer">
+                        Scoreganizer
+                    </a>
+                </div>
+            </div>
         </div>
-    </el-footer>
+        <div style="text-align: center">
+            <span>Copyright @ 2023</span>
+            <a class="link text" href="http://openms.top">
+                开源扫雷网 openms.top
+            </a>
+            <span>　版权所有</span>
+            <a class="link text" href="https://beian.miit.gov.cn/">
+                苏ICP备2023056839号-1
+            </a>
+            <span style="width: 12px; display: inline-block" />
+            <a
+                class="link text"
+                href="https://beian.mps.gov.cn/#/query/webSearch?code=32020602001691" rel="noopener noreferrer"
+                target="_blank"
+            >
+                苏公网安备32020602001691
+            </a>
+        </div>
+    </footer>
 </template>
 
 <script setup lang="ts">
+import '@/styles/link.css';
 
-import Thanks from './dialogs/Thanks.vue';
-import Downloads from './dialogs/Downloads.vue';
+import { useI18n } from 'vue-i18n';
 
+/* 本地化 Localization */
+const i18nMessage = {
+    'zh-cn': { local: {
+        links: '友链',
+    } },
+    en: { local: {
+        links: 'Links',
+    } },
+};
+
+const { t } = useI18n({ messages: i18nMessage });
 </script>
+
+<style scoped>
+.site-footer {
+    box-sizing: border-box;
+    border-top: 1px solid var(--ui-border-color);
+    margin-top: 24px;
+    padding: 24px 1rem 0;
+}
+</style>

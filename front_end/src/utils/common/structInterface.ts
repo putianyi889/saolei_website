@@ -1,13 +1,3 @@
-export interface DbSchema {
-    sys: {},
-    database: {}
-}
-export interface dbAcceptParma {
-    dbName: string,
-    path: string,
-    value: boolean | string,
-    user: boolean
-}
 export enum LoginStatus {
     // 首次打开页面，还没有做判断，判断是否需要尝试登录，主要是防抖用
     Undefined,
@@ -20,83 +10,43 @@ export enum LoginStatus {
     // 正在打开弹窗填写注册信息
     Register,
     // 正在弹窗上找回密码
-    IsRetrieve
+    IsRetrieve,
 }
 
-export interface RecordBIE {
-    timems: number[],
-    bvs: number[],
-    stnb: number[],
-    ioe: number[],
-    path: number[],
-    timems_id: number[],
-    bvs_id: number[],
-    stnb_id: number[],
-    ioe_id: number[],
-    path_id: number[],
+export type TaskStatus = '' | 'loading' | 'success' | 'error';
+
+export interface ApiSuccessResponse<T> {
+    type: 'success';
+    data: T;
 }
 
-export interface Record {
-    timems: number,
-    bvs: number,
-    stnb: number,
-    ioe: number,
-    path: number,
-    timems_id: number,
-    bvs_id: number,
-    stnb_id: number,
-    ioe_id: number,
-    path_id: number,
+export interface ApiErrorResponse {
+    type: 'error';
+    object?: string;
+    category?: string;
+    msg?: string;
 }
 
-interface ExtendedVideoStat {
-    left: number,
-    right: number,
-    double: number,
-    cl: number,
-    left_s: number,
-    right_s: number,
-    double_s: number,
-    cl_s: number,
-    path: number,
-    flag: number,
-    flag_s: number,
-    stnb: number,
-    rqp: number,
-    ioe: number,
-    thrp: number,
-    corr: number,
-    ce: number,
-    ce_s: number,
-    op: number,
-    isl: number,
-    cell0: number,
-    cell1: number,
-    cell2: number,
-    cell3: number,
-    cell4: number,
-    cell5: number,
-    cell6: number,
-    cell7: number,
-    cell8: number,
-}
+export type ApiResponse<T> = ApiSuccessResponse<T> | ApiErrorResponse;
 
-interface VideoStat {
-    level: string,
-    mode: string,
-    timems: number,
-    bbbv: number,
-    bvs: number,
-    identifier: string,
-    review_code: number,
-}
+export const DjangoTaskResultStatusOptions = ['READY', 'RUNNING', 'FAILED', 'SUCCESSFUL', 'NULL'] as const;
+export type DjangoTaskResultStatus = typeof DjangoTaskResultStatusOptions[number];
 
-export interface GeneralFile {
-    uid: number,
-    id: number,
-    filename: string,
-    file: File,
-    status: string,
-    videostat: VideoStat | null,
-    extstat: ExtendedVideoStat | null,
+export interface GetUserInfoResponse {
+    id: number;
+    username: string;
+    firstname: string;
+    lastname: string;
+    realname: string;
+    is_banned: boolean;
+    is_staff: boolean;
+    is_superuser?: boolean;
+    is_memorial?: boolean;
+    verified?: boolean;
+    country: string;
+    signature: string;
+    last_change_avatar: string;
+    last_change_signature: string;
+    left_avatar_n: number;
+    left_signature_n: number;
 }

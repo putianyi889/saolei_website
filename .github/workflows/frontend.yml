@@ -1,0 +1,41 @@
+name: Front-end Build
+
+on:
+  pull_request:
+    paths: 
+      - 'front_end/cypress/**'
+      - '!front_end/cypress/e2e/**'
+      - '!front_end/cypress/support/e2e.ts'
+      - 'front_end/src/**'
+      - '!front_end/src/**/*.test.ts'
+      - '.github/workflows/frontend.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 检出当前的代码仓库
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    # 设置 Node.js 版本
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '22.13.0' # 设置 Node.js 版本，你可以根据你的项目需要调整
+
+    # 安装依赖
+    - name: Install dependencies
+      run: |
+        node -v
+        npm -v
+        cd front_end
+        npm install
+        npm list
+
+    # 运行构建命令
+    - name: Build project 1
+      run: |
+        cd front_end
+        npm run build:openms

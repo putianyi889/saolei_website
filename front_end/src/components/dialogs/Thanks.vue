@@ -1,78 +1,76 @@
 <template>
-    <el-link @click="centerDialogVisible = true;">{{ $t('footer.team') }}</el-link>
-    <el-dialog v-model="centerDialogVisible" :title="$t('team.title')" width="700px" align-center draggable
-        :lock-scroll="false">
-        <div style="padding-bottom: 5px"><strong>{{ $t('team.owner') }}</strong></div>
+    <div class="section-label">
+        <strong>{{ t('local.owner') }}</strong>
+    </div>
+    <div class="section-body">
+        <PlayerName :user-id="1" />
+    </div>
+    <div class="section-label">
+        <strong>{{ t('local.moderator') }}</strong>
+    </div>
+    <div class="section-body">
+        <PlayerName :user-id="2" />
+        <PlayerName :user-id="24" />
+        <PlayerName :user-id="44" />
+        <PlayerName :user-id="82" />
+        <PlayerName :user-id="114" />
+        <PlayerName :user-id="144" />
+    </div>
+    <div class="section-label">
+        <strong>{{ t('local.software') }}</strong>
+    </div>
+    <div class="section-body">
+        <GitHubUser username="putianyi889" />
+        <GitHubUser username="eee555" />
+        <GitHubUser username="Threeeee" />
+        <GitHubUser username="ljzloser" />
+        <GitHubUser username="hwatson381" />
+        <GitHubUser username="LockhartANR" />
+        <GitHubUser username="hgraceb" />
+        <GitHubUser username="Corday-nkusky" />
+        <GitHubUser username="xiean-cn" />
+        <GitHubUser username="shenjia" />
+        <GitHubUser username="trixyz28" />
+        <GitHubUser username="gacord9672" />
+    </div>
+    <div class="section-label">
+        <strong>{{ t('local.localization') }}</strong>
+    </div>
+    <div class="section-body">
         <div>
-            <GitHubUser username="eee555" />
+            {{ t('local.zhCn') }}
+            <GitHubUser username="putianyi889" />
         </div>
-        <div style="padding-bottom: 5px; margin-top: 15px"><strong>{{ $t('team.moderator') }}</strong></div>
-        <div>少年</div>
-        <div>GodnuX</div>
-        <div>auk ;-;</div>
-        <el-divider />
-        <el-row>
-            <el-col :span="8">
-                <div style="padding-bottom: 5px"><strong>{{ $t('team.software') }}</strong></div>
-                <div>
-                    <GitHubUser username="eee555" />
-                </div>
-                <div>
-                    <GitHubUser username="putianyi889" />
-                </div>
-                <div>
-                    <GitHubUser username="hwatson381" />
-                </div>
-                <div>
-                    <GitHubUser username="hgraceb" />
-                </div>
-                <div>
-                    <GitHubUser username="ljzloser" />
-                </div>
-            </el-col>
-            <el-col :span="8">
-                <div style="padding-bottom: 5px"><strong>{{ $t('team.localization') }}</strong></div>
-                <div>{{ $t('team.zhCn') }}　
-                    <GitHubUser username="putianyi889" />
-                </div>
-                <div>{{ $t('team.en') }}　
-                    <GitHubUser username="putianyi889" />
-                </div>
-                <div>{{ $t('team.de') }}　
-                    <GitHubUser username="auk3" />
-                </div>
-                <div>{{ $t('team.pl') }}　
-                    <GitHubUser username="kiraa96" />
-                </div>
-            </el-col>
-            <el-col :span="8">
-                <div style="padding-bottom: 5px"><strong>{{ $t('team.designer') }}</strong></div>
-                <div>
-                    <GitHubUser username="eee555" />
-                </div>
-                <div>
-                    <GitHubUser username="putianyi889" />
-                </div>
-            </el-col>
-        </el-row>
-        <el-divider />
-        <div style="padding-bottom: 5px"><strong>{{ $t('team.acknowledgement') }}</strong></div>
+        <div>
+            {{ t('local.en') }}
+            <GitHubUser username="putianyi889" />
+        </div>
+        <div>
+            {{ t('local.de') }}
+            <GitHubUser username="auk3" />
+        </div>
+        <div>
+            {{ t('local.pl') }}
+            <GitHubUser username="kiraa96" />
+        </div>
+    </div>
+    <div class="section-label">
+        <strong>{{ t('local.acknowledgement') }}</strong>
+    </div>
+    <div class="section-body">
         <span v-for="item in acknowledgements" style="padding-right: 10px">
             {{ item.text }}
         </span>
-    </el-dialog>
+    </div>
 </template>
 
 <script lang="ts" setup>
+import '@/styles/layout.css';
 // 注册、登录的弹框及右上方按钮
-import { ref } from 'vue'
-import GitHubUser from '../widgets/GitHubUser.vue'
-
 import { useI18n } from 'vue-i18n';
-const t = useI18n();
 
-const centerDialogVisible = ref(false);
-
+import PlayerName from '@/components/PlayerName.vue';
+import GitHubUser from '@/components/widgets/GitHubUser.vue';
 
 // 积分系统完成后需要加jsd
 const acknowledgements = [
@@ -83,9 +81,64 @@ const acknowledgements = [
     { text: '冰糖雪梨' },
     { text: '生命★是┗ 〓┛是☆什么' },
     { text: 'Arya' },
-]
+    { text: 'jabajop' },
+    { text: 'qqwref' },
+    { text: 'Nanaka.' },
+    { text: '购置拆解' },
+    { text: '毛毛虫' },
+    { text: '铧嵇' },
+    { text: 'Vostok' },
+    { text: 'Oskain' },
+    { text: 'wyw雨' },
+    { text: '·77ャ' },
+    { text: 'When' },
+];
 
+/* 本地化 Localization */
+const i18nMessage = {
+    'zh-cn': { local: {
+        owner: '站长',
+        moderator: '管理员',
+        software: '开发',
+        localization: '本地化',
+        zhCn: '简体中文',
+        en: '英语',
+        de: '德语',
+        pl: '波兰语',
+        designer: '外观设计',
+        acknowledgement: '致谢',
+    } },
+    en: { local: {
+        owner: 'Owner',
+        moderator: 'Moderators',
+        software: 'Developers',
+        localization: 'Localization',
+        zhCn: 'Simplified Chinese',
+        en: 'English',
+        de: 'German',
+        pl: 'Polish',
+        designer: 'UI designers',
+        acknowledgement: 'Acknowledgement',
+    } },
+};
+
+const { t } = useI18n({ messages: i18nMessage });
 </script>
 
+<style scoped>
+.thanks-section {
+    border-top: 1px solid var(--ui-border-color);
+    margin-top: 24px;
+    padding-top: 24px;
+}
 
-<style></style>
+.section-label {
+    padding-bottom: 5px;
+}
+
+.section-body {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 15px;
+}
+</style>

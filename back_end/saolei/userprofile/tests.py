@@ -1,3 +1,419 @@
-from django.test import TestCase
+from datetime import timedelta
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+from urllib.parse import urlencode
 
-# Create your tests here.
+from django.conf import settings
+from django.core.cache import caches
+from django.core.files.base import ContentFile
+from django.test import Client, override_settings, TestCase
+from django.utils import timezone
+
+from msuser.models import UserMS
+from userprofile.models import UserProfile
+from videomanager.models import ExpandVideoModel, VideoModel
+
+
+@override_settings(RATELIMIT_ENABLE=False)
+class UserProfileAdminApiTests(TestCase):
+    def setUp(self):
+        self.staff = UserProfile.objects.create_user(
+            username='profile_staff',
+            email='profile_staff@example.com',
+            password='password',
+            is_staff=True,
+            userms=UserMS.objects.create(),
+        )
+        self.userms = UserMS.objects.create(
+            identifiers=['alpha', 'beta'],
+            video_num_limit=100,
+        )
+        self.user = UserProfile.objects.create_user(
+            username='profile_user',
+            email='profile_user@example.com',
+            password='password',
+            realname='旧名',
+            firstname='Old',
+            lastname='Name',
+            userms=self.userms,
+        )
+        self.client.force_login(self.staff)
+
+    def patch_update(self, user_id, payload):
+        return self.client.patch(
+            f'/api/userprofile/admin/update/{user_id}',
+            urlencode(payload),
+            content_type='application/x-www-form-urlencoded',
+        )
+
+    def test_admin_get_user_profile(self):
+        response = self.client.get(f'/api/userprofile/admin/detail/{self.user.id}')
+
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertEqual(data['id'], self.user.id)
+        self.assertEqual(data['username'], 'profile_user')
+        self.assertEqual(data['firstname'], 'Old')
+        self.assertEqual(data['lastname'], 'Name')
+        self.assertEqual(data['userms_id'], self.userms.id)
+        self.assertEqual(data['userms_identifiers'], ['alpha', 'beta'])
+        self.assertEqual(data['userms_video_num_limit'], 100)
+
+    def test_admin_update_user_profile(self):
+        old_updated = timezone.now() - timedelta(days=1)
+        UserProfile.objects.filter(id=self.user.id).update(date_updated=old_updated)
+
+        response = self.patch_update(self.user.id, {
+            'username': 'profile_user_new',
+            'email': 'profile_user_new@example.com',
+            'firstname': 'New',
+            'lastname': 'Player',
+            'realname': '新名',
+            'signature': 'updated signature',
+            'country': 'CN',
+            'is_banned': True,
+            'left_realname_n': 2,
+            'left_avatar_n': 3,
+            'left_signature_n': 4,
+        })
+
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertEqual(data['username'], 'profile_user_new')
+        self.assertEqual(data['firstname'], 'New')
+        self.assertEqual(data['lastname'], 'Player')
+        self.assertTrue(data['is_banned'])
+
+        self.user.refresh_from_db()
+        self.userms.refresh_from_db()
+        self.assertEqual(self.user.email, 'profile_user_new@example.com')
+        self.assertEqual(self.user.signature, 'updated signature')
+        self.assertEqual(self.user.country, 'CN')
+        self.assertEqual(self.user.left_realname_n, 2)
+        self.assertEqual(self.user.left_avatar_n, 3)
+        self.assertEqual(self.user.left_signature_n, 4)
+        self.assertGreater(self.user.date_updated, old_updated)
+        self.assertEqual(self.userms.video_num_limit, 100)
+
+    def test_admin_update_writes_equal_value(self):
+        old_updated = timezone.now() - timedelta(days=1)
+        UserProfile.objects.filter(id=self.user.id).update(date_updated=old_updated)
+
+        response = self.patch_update(self.user.id, {
+            'realname': self.user.realname,
+        })
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.user.refresh_from_db()
+        self.assertGreater(self.user.date_updated, old_updated)
+
+    def test_staff_cannot_update_another_staff_user(self):
+        other_staff = UserProfile.objects.create_user(
+            username='profile_other_staff',
+            email='profile_other_staff@example.com',
+            password='password',
+            is_staff=True,
+            userms=UserMS.objects.create(),
+        )
+
+        response = self.patch_update(other_staff.id, {
+            'realname': 'blocked',
+        })
+
+        self.assertEqual(response.status_code, 403)
+        other_staff.refresh_from_db()
+        self.assertNotEqual(other_staff.realname, 'blocked')
+
+    def test_non_staff_cannot_use_admin_api(self):
+        self.client.force_login(self.user)
+
+        get_response = self.client.get(f'/api/userprofile/admin/detail/{self.user.id}')
+        patch_response = self.patch_update(self.user.id, {
+            'realname': 'blocked',
+        })
+
+        self.assertEqual(get_response.status_code, 403)
+        self.assertEqual(patch_response.status_code, 403)
+
+    def test_legacy_staff_userprofile_urls_are_removed(self):
+        get_response = self.client.get('/userprofile/get/', {'id': self.user.id})
+        post_response = self.client.post('/userprofile/set/', {
+            'id': self.user.id,
+            'field': 'realname',
+            'value': 'blocked',
+        })
+
+        self.assertEqual(get_response.status_code, 404)
+        self.assertEqual(post_response.status_code, 404)
+
+    def test_staff_assignment_requires_superuser(self):
+        for viewer in (self.staff, self.user, None):
+            with self.subTest(viewer=viewer):
+                if viewer is None:
+                    self.client.logout()
+                else:
+                    self.client.force_login(viewer)
+                self.assertEqual(self.client.get('/api/userprofile/admin/staff').status_code, 401)
+                response = self.client.post('/api/userprofile/admin/staff', {'user_id': self.user.pk, 'is_staff': True}, content_type='application/json')
+                self.assertEqual(response.status_code, 401)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_staff)
+
+    def test_staff_assignment_initializes_csrf_and_does_not_require_staff(self):
+        self.staff.is_superuser = True
+        self.staff.is_staff = False
+        self.staff.save(update_fields=['is_superuser', 'is_staff', 'date_updated'])
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.staff)
+        payload = {'user_id': self.user.pk, 'is_staff': True}
+        self.assertEqual(client.post('/api/userprofile/admin/staff', payload, content_type='application/json').status_code, 403)
+        access = client.get('/api/userprofile/admin/staff')
+        self.assertEqual(access.status_code, 200, access.content)
+        self.assertIn('no-store', access['Cache-Control'])
+        for is_staff in (True, False):
+            with self.subTest(is_staff=is_staff):
+                payload['is_staff'] = is_staff
+                response = client.post('/api/userprofile/admin/staff', payload, content_type='application/json', HTTP_X_CSRFTOKEN=access.json()['csrf_token'])
+                self.assertEqual(response.status_code, 200, response.content)
+                self.assertEqual(response.json(), {'id': self.user.pk, 'is_staff': is_staff})
+                self.user.refresh_from_db()
+                self.assertEqual(self.user.is_staff, is_staff)
+
+
+@override_settings(RATELIMIT_ENABLE=False)
+class UserProfileUpdateApiTests(TestCase):
+    def setUp(self):
+        self.user = UserProfile.objects.create_user(
+            username='self_user',
+            email='self_user@example.com',
+            password='password',
+            userms=UserMS.objects.create(),
+        )
+        self.client.force_login(self.user)
+
+    def test_update_profile_keeps_error_when_name_censorship_fails(self):
+        for result, category in [(False, 'illegal'), (RuntimeError('verification unavailable'), 'unknown')]:
+            with self.subTest(category=category), patch('userprofile.services.verify_text') as verify:
+                if isinstance(result, Exception):
+                    verify.side_effect = result
+                else:
+                    verify.return_value = result
+                response = self.client.post('/api/userprofile/update_profile', {'realname': 'Jason Weng'}, REMOTE_ADDR='203.0.113.7')
+                verify.assert_called_once_with('Jason Weng', self.user.id, '203.0.113.7')
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(response.json()['realname'], {'type': 'error', 'object': 'censorship', 'category': category})
+            self.user.refresh_from_db()
+            self.assertEqual(self.user.realname, '匿名')
+            self.assertFalse(self.user.has_realname())
+
+
+@override_settings(RATELIMIT_ENABLE=False)
+class RealnamePrivacyTests(TestCase):
+    patch_update = UserProfileAdminApiTests.patch_update
+
+    def setUp(self):
+        UserProfileAdminApiTests.setUp(self)
+        self.user.verified = True
+        self.user.hide_realname = True
+        self.user.save(update_fields=['verified', 'hide_realname'])
+
+    def privacy(self, hide):
+        return self.client.post('/api/userprofile/name-privacy', {'hide_realname': hide})
+
+    def test_public_and_private_names_have_distinct_contracts(self):
+        for viewer in (None, self.user, self.staff):
+            with self.subTest(viewer=viewer):
+                self.client.logout()
+                if viewer:
+                    self.client.force_login(viewer)
+                for url in (f'/api/userprofile/info/{self.user.pk}', f'/api/userprofile/infobulk?ids={self.user.pk}'):
+                    response = self.client.get(url)
+                    self.assertEqual(response.status_code, 200, response.content)
+                    data = response.json()
+                    if isinstance(data, list):
+                        data = data[0]
+                    for field in ('realname', 'firstname', 'lastname'):
+                        self.assertEqual(data[field], 'hidden')
+                        self.assertNotIn('_' + field, data)
+                    self.assertNotIn('has_realname', data)
+                    self.assertNotIn('hide_realname', data)
+        self.client.force_login(self.user)
+        response = self.client.get('/api/userprofile/info/0')
+        self.assertEqual(response.json()['realname'], '旧名')
+        self.assertTrue(response.json()['verified'])
+        self.assertTrue(response.json()['hide_realname'])
+        with patch('common.api.TopRankingCache.get_anchors', return_value={}):
+            response = self.client.get('/api/common/loginauto')
+        self.assertEqual(response.json()['user']['realname'], '旧名')
+        self.assertTrue(response.json()['user']['verified'])
+        self.assertTrue(response.json()['user']['hide_realname'])
+        self.client.force_login(self.staff)
+        response = self.client.get(f'/api/userprofile/admin/detail/{self.user.pk}')
+        self.assertEqual(response.json()['realname'], '旧名')
+
+    def test_getters_and_realname_gate_use_original_values(self):
+        self.assertEqual(self.user.realname, 'hidden')
+        self.assertTrue(self.user.has_realname())
+        self.assertEqual(self.user._realname, '旧名')
+        for missing in ('', '   ', '匿名'):
+            with self.subTest(missing=missing):
+                self.user.realname = missing
+                self.assertFalse(self.user.has_realname())
+                self.assertFalse(self.user.is_name_hidden)
+                self.assertEqual(self.user.realname, missing)
+
+    def test_private_switch_revoke_and_name_clear(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.privacy(False).json(), {'hide_realname': False})
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.hide_realname)
+        self.assertEqual(self.privacy(True).json(), {'hide_realname': True})
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.hide_realname)
+        self.client.force_login(self.staff)
+        response = self.patch_update(self.user.pk, {'verified': False})
+        self.assertFalse(response.json()['hide_realname'])
+        self.client.force_login(self.user)
+        response = self.privacy(True)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json(), {'type': 'error', 'object': 'privacy', 'category': 'not_authorized'})
+        self.assertEqual(self.privacy(False).json(), {'hide_realname': False})
+        self.client.force_login(self.staff)
+        self.patch_update(self.user.pk, {'verified': True})
+        self.client.force_login(self.user)
+        self.privacy(True)
+        self.client.force_login(self.staff)
+        response = self.patch_update(self.user.pk, {'realname': ''})
+        self.assertTrue(response.json()['verified'])
+        self.assertFalse(response.json()['hide_realname'])
+        self.client.force_login(self.user)
+        response = self.privacy(True)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json(), {'type': 'error', 'object': 'privacy', 'category': 'realname_required'})
+
+    def test_saving_name_and_hiding_is_atomic(self):
+        self.user._realname = '匿名'
+        self.user._firstname = ''
+        self.user.hide_realname = False
+        self.user.save(update_fields=['_realname', '_firstname', 'hide_realname'])
+        self.client.force_login(self.user)
+        with patch('userprofile.services.verify_text', return_value=True):
+            response = self.client.post('/api/userprofile/update_profile', {'realname': '首次实名', 'hide_realname': True})
+        self.assertEqual(response.json()['hide_realname']['type'], 'success')
+        self.user.refresh_from_db()
+        self.assertEqual(self.user._realname, '首次实名')
+        self.assertEqual(self.user.realname, 'hidden')
+        # An empty English name remains writable while all public names are masked.
+        with patch('userprofile.services.verify_text', return_value=True):
+            response = self.client.post('/api/userprofile/update_profile', {'firstname': 'Given'})
+        self.assertEqual(response.json()['firstname']['type'], 'success')
+        self.user.refresh_from_db()
+        self.assertEqual(self.user._firstname, 'Given')
+        self.assertTrue(self.user.hide_realname)
+
+    def test_failed_privacy_or_name_validation_rolls_back_names(self):
+        self.user._realname = '匿名'
+        self.user.verified = False
+        self.user.hide_realname = False
+        self.user.save(update_fields=['_realname', 'verified', 'hide_realname'])
+        self.client.force_login(self.user)
+        with patch('userprofile.services.verify_text', return_value=True):
+            response = self.client.post('/api/userprofile/update_profile', {'realname': '首次实名', 'hide_realname': True})
+        self.assertEqual(response.json()['realname']['type'], 'error')
+        self.user.refresh_from_db()
+        self.assertEqual(self.user._realname, '匿名')
+        self.assertFalse(self.user.verified)
+        for field in ('realname', 'firstname', 'lastname'):
+            with self.subTest(field=field):
+                response = self.client.post('/api/userprofile/update_profile', {field: ' hidden ', 'realname': 'hidden' if field == 'realname' else '首次实名'})
+                self.assertEqual(response.json()['realname']['type'], 'error')
+                self.client.force_login(self.staff)
+                self.assertEqual(self.patch_update(self.user.pk, {field: 'hidden'}).status_code, 400)
+                self.client.force_login(self.user)
+                self.user.refresh_from_db()
+                self.assertEqual(self.user._realname, '匿名')
+
+    def test_video_queries_do_not_bypass_name_getters(self):
+        with TemporaryDirectory() as root, override_settings(MEDIA_ROOT=root):
+            video = VideoModel(player=self.user, video=ExpandVideoModel.objects.create(identifier='privacy'), software='e', level='e', bv=100, timems=100000)
+            video.file.save('privacy.evf', ContentFile(b'original replay'))  # noqa: DJM100
+            other = VideoModel.objects.create(player=self.staff, video=ExpandVideoModel.objects.create(), software='e', level='e', bv=100, timems=90000)
+            response = self.client.get('/api/video/query', {'filters': '[{"field":"level","eq":"e"},{"field":"mode","eq":"00"}]', 'sorts': '[{"field":"timems","direction":"asc"}]'})
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual([row['id'] for row in response.json()['videos']], [other.pk, video.pk])
+            row = next(row for row in response.json()['videos'] if row['id'] == video.pk)
+            self.assertEqual(row['player__realname'], 'hidden')
+            for sort_field in ('player__realname', 'player___realname'):
+                for direction in ('asc', 'desc'):
+                    with self.subTest(sort_field=sort_field, direction=direction):
+                        sorts = '[{"field":"' + sort_field + '","direction":"' + direction + '"}]'
+                        response = self.client.get('/api/video/query', {'sorts': sorts})
+                        self.assertEqual(response.status_code, 400, response.content)
+            response = self.client.get(f'/api/video/admin/detail/{video.pk}')
+            self.assertEqual(response.json()['player__realname'], self.user._realname)
+            self.assertEqual(self.client.get('/video/get/', {'id': video.pk}).status_code, 404)
+
+    def test_updates_only_the_current_users_privacy_without_censorship_or_csrf(self):
+        self.client = Client(enforce_csrf_checks=True)
+        self.client.force_login(self.user)
+        previous = timezone.now() - timedelta(days=1)
+        UserProfile.objects.filter(pk=self.user.pk).update(date_updated=previous)
+        with patch('userprofile.services.verify_text') as verify_text:
+            response = self.client.post('/api/userprofile/name-privacy', {
+                'hide_realname': False, 'id': self.staff.pk, 'realname': 'Ignored', 'signature': 'Ignored',
+            })
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(response.json(), {'hide_realname': False})
+            self.assertEqual(self.privacy(True).json(), {'hide_realname': True})
+        verify_text.assert_not_called()
+        self.user.refresh_from_db()
+        self.staff.refresh_from_db()
+        self.assertEqual(self.user._realname, '旧名')
+        self.assertEqual(self.user.signature, '')
+        self.assertTrue(self.user.hide_realname)
+        self.assertFalse(self.staff.hide_realname)
+        self.assertGreater(self.user.date_updated, previous)
+        updated = self.client.get('/api/userprofile/infoupdated', {'since': int(previous.timestamp() * 1000)})
+        self.assertIn(self.user.pk, updated.json())
+        self.client.force_login(self.staff)
+        self.assertTrue(self.client.get(f'/api/userprofile/admin/detail/{self.user.pk}').json()['hide_realname'])
+
+    def test_rejects_guests_and_banned_users(self):
+        self.client.logout()
+        self.assertEqual(self.privacy(False).status_code, 403)
+        self.client.force_login(self.user)
+        self.user.is_banned = True
+        self.user.save(update_fields=['is_banned'])
+        self.assertEqual(self.privacy(False).status_code, 403)
+
+    def test_rejects_invalid_payloads_and_unsafe_gets(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get('/api/userprofile/name-privacy').status_code, 405)
+        for body in ({}, {'hide_realname': 'invalid'}):
+            with self.subTest(body=body):
+                response = self.client.post('/api/userprofile/name-privacy', body)
+                self.assertEqual(response.status_code, 422)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.hide_realname)
+
+    def test_has_an_independent_per_user_rate_limit(self):
+        self.client.force_login(self.user)
+        test_caches = {
+            **settings.CACHES,
+            'name-privacy-limits': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache', 'LOCATION': 'name-privacy-rate-tests'},
+        }
+        with self.settings(RATELIMIT_ENABLE=True, RATELIMIT_USE_CACHE='name-privacy-limits', CACHES=test_caches), patch('django_ratelimit.core.time.time', return_value=timezone.now().timestamp()):
+            rate_cache = caches['name-privacy-limits']
+            rate_cache.clear()
+            self.addCleanup(rate_cache.clear)
+            for index in range(30):
+                response = self.privacy(bool(index % 2))
+                self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(self.privacy(False).status_code, 429)
+            self.user.refresh_from_db()
+            self.assertTrue(self.user.hide_realname)
+            response = self.client.post('/api/userprofile/update_profile', {'firstname': 'New'})
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(self.client.post('/api/userprofile/update_profile', {'firstname': 'New'}).status_code, 429)
+            self.client.force_login(self.staff)
+            self.assertEqual(self.privacy(False).status_code, 200)

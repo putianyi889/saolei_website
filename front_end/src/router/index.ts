@@ -1,77 +1,139 @@
-import { createRouter, createWebHashHistory, RouteRecordRaw } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router';
+import { createRouter, createWebHashHistory } from 'vue-router';
 
+import { rankingRoutes } from '@/views/RankingView/routes';
+import { resourceRoutes } from '@/views/ResourcesView/routes';
+import { staffRoutes } from '@/views/StaffView/routes';
+import { userRoutes } from '@/views/UserView/routes';
 
-const routes: Array<RouteRecordRaw> = [
-  {
-    path: '/',
-    name: 'home',
-    component: () => import('../views/HomeView.vue')
-  },
-  {
-    path: '/ranking',
-    name: 'ranking',
-    component: () => import('../views/RankingView.vue')
-  },
-  {
-    path: '/video',
-    name: 'video',
-    component: () => import('../views/VideoView.vue')
-  },
-  {
-    path: '/world',
-    name: 'world',
-    component: () => import('../views/WorldView.vue')
-  },
-  {
-    path: '/guide',
-    name: 'guide',
-    component: () => import('../views/GuideView.vue')
-  },
-  {
-    path: '/guide/:name',
-    name: 'guide_name',
-    component: () => import('../views/GuideView.vue')
-  },
-  {
-    path: '/guide/:name/:paragraph',
-    name: 'guide_name_paragraph',
-    component: () => import('../views/GuideView.vue')
-  },
-  {
-    path: '/score',
-    name: 'score',
-    component: () => import('../views/ScoreRankView.vue')
-  },
-  {
-    path: '/settings',
-    name: 'settings',
-    component: () => import('../views/SettingView.vue')
-  },
-  {
-    path: '/player/:id',
-    name: 'player_id',
-    component: () => import('../views/PlayerView.vue')
-  },
-  {
-    path: '/player',
-    name: 'player',
-    component: () => import('../views/PlayerView.vue')
-  },
-  {
-    path: '/upload',
-    name: 'upload',
-    component: () => import('../views/UploadView.vue')
-  },
-  {
-    path: '/staff',
-    name: 'staff',
-    component: () => import('../views/StaffView.vue')
-  },
-]
+const routes: RouteRecordRaw[] = [
+    {
+        path: '/',
+        name: 'home',
+        // 登录页与注册页地址仍渲染首页，由 Login/App.vue 按路径打开对应弹窗。
+        alias: ['/login', '/register'],
+        component: () => import('../views/HomeView/App.vue'),
+    },
+    {
+        path: '/ranking',
+        name: 'ranking',
+        component: () => import('../views/RankingView/App.vue'),
+        redirect: '/ranking/speed',
+        children: rankingRoutes,
+    },
+    {
+        path: '/video',
+        name: 'video',
+        redirect: { name: 'database-videos' },
+    },
+    {
+        path: '/database',
+        name: 'database',
+        component: () => import('../views/DatabaseView/App.vue'),
+        redirect: { name: 'database-users' },
+        children: [
+            { path: 'users', name: 'database-users', component: () => import('../views/DatabaseView/UserView.vue') },
+            { path: 'videos', name: 'database-videos', component: () => import('../views/DatabaseView/VideoView.vue') },
+            { path: 'identifiers', name: 'database-identifiers', component: () => import('../views/DatabaseView/IdentifierView.vue') },
+            { path: 'works', name: 'database-works', component: () => import('../views/DatabaseView/MediaQueryView.vue') },
+        ],
+    },
+    {
+        path: '/works',
+        name: 'works',
+        component: () => import('../views/WorksView/App.vue'),
+    },
+    {
+        path: '/video/:id',
+        name: 'video_id',
+        component: () => import('../views/VideoAnalyzerView/App.vue'),
+        props: true,
+    },
+    {
+        path: '/server',
+        name: 'server',
+        component: () => import('../views/ServerView/App.vue'),
+    },
+    {
+        path: '/resources',
+        redirect: { name: 'resources-metasweeper' },
+    },
+    ...resourceRoutes,
+    {
+        path: '/minigame',
+        component: () => import('../views/MiniGameView/App.vue'),
+        redirect: '/minigame/left-click',
+        children: [
+            { path: 'left-click', name: 'minigame-left-click', component: () => import('../views/MiniGameView/LeftClickTraining/App.vue') },
+            { path: 'multi-touch', name: 'minigame-multi-touch', component: () => import('../views/MiniGameView/LeftClickTraining/App.vue'), props: { gameType: 'multi-touch' } },
+            { path: 'flag-chord', name: 'minigame-flag-chord', component: () => import('../views/MiniGameView/FlagChordTraining/App.vue') },
+            { path: 'missing-cell', name: 'minigame-missing-cell', component: () => import('../views/MiniGameView/MissingCellTraining/App.vue') },
+        ],
+    },
+    {
+        path: '/settings',
+        name: 'settings',
+        component: () => import('../views/SettingView/App.vue'),
+    },
+    {
+        path: '/bind/saolei',
+        name: 'bind_saolei',
+        component: () => import('../views/BindSaoleiView/App.vue'),
+    },
+    {
+        path: '/player/:id',
+        name: 'player_id',
+        component: () => import('../views/UserView/App.vue'),
+        redirect: (to) => {
+            const { id } = to.params;
+            if (typeof id !== 'string') return '/player/0/top';
+
+            return `/player/${id}/top`;
+        },
+        children: userRoutes,
+    },
+    {
+        path: '/staff',
+        name: 'staff',
+        component: () => import('../views/StaffView/App.vue'),
+        redirect: '/staff/userprofile',
+        children: staffRoutes,
+    },
+    {
+        path: '/superuser/staff',
+        name: 'superuser-staff',
+        component: () => import('../views/StaffView/StaffAssignments.vue'),
+    },
+    {
+        path: '/superuser/delete-videos',
+        name: 'superuser-delete-videos',
+        component: () => import('../views/StaffView/DeleteVideos.vue'),
+    },
+    {
+        path: '/superuser/memorial',
+        name: 'superuser-memorial',
+        component: () => import('../views/StaffView/MemorialAccounts.vue'),
+    },
+    {
+        path: '/tournament/:id',
+        name: 'tournament_id',
+        component: () => import('../views/TournamentView/TournamentView.vue'),
+    },
+    {
+        path: '/tournament',
+        name: 'tournament',
+        component: () => import('../views/TournamentView/TournamentView.vue'),
+    },
+    {
+        path: '/gsc/admin',
+        name: 'gsc_admin',
+        component: () => import('../views/GSCAdminView.vue'),
+    },
+];
 
 const router = createRouter({
-  history: createWebHashHistory(import.meta.env.BASE_URL),
-  routes
-})
+    history: createWebHashHistory(import.meta.env.BASE_URL),
+    routes,
+});
 
-export default router
+export default router;

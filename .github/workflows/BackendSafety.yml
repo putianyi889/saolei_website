@@ -1,0 +1,32 @@
+name: Backend Static Safety Checks
+
+on:
+  push:
+    branches:
+      - main  # Adjust the branch name as needed
+  pull_request:
+    paths: 
+      - 'back_end/saolei/**'
+      - '.github/workflows/BackendSafety.yml'
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: 3.12
+
+      - name: Install dependencies
+        run: |
+          python -m pip download --no-deps --dest back_end/saolei/wheels -r back_end/saolei/requirements-wheels.txt
+          pip install --find-links back_end/saolei/wheels -r back_end/saolei/requirements.txt
+          pip install pytest
+
+      - name: Run static safety tests
+        run: pytest back_end/saolei/static_tests/ --maxfail=1 --disable-warnings -v

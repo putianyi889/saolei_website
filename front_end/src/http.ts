@@ -1,29 +1,30 @@
-import axios from 'axios'
+import axios from 'axios';
 // import { AXIOS_BASE_URL } from './config';
 
 axios.defaults.headers['Content-Type'] = 'application/x-www-form-urlencoded';
 axios.defaults.baseURL = import.meta.env.VITE_BASE_API;
 const $axios = axios.create({
     timeout: 20000,
-    withCredentials: true   // 必须指定这个参数，否则axios才能携带参数
-})
+    withCredentials: true, // 必须指定这个参数，否则axios才能携带参数
+});
+$axios.interceptors.response.use(undefined, async (error: Error) => {
+    if (axios.isAxiosError(error) && error.response?.status === 503) {
+        const { httpErrorNotification, isRankingRefreshError } = await import('@/components/Notifications');
+        if (isRankingRefreshError(error)) httpErrorNotification(error);
+    }
+    throw error;
+});
+
 // declare module 'axios' {
 //     interface AxiosInstance {
 //         (config: AxiosRequestConfig): Promise<any>
 //     }
 // }
 
-
-export default $axios
-
-
-
-
-
+export default $axios;
 
 // import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 // import { ElLoading } from 'element-plus';
-
 
 // let loading: any;
 
@@ -53,7 +54,6 @@ export default $axios
 //   startLoading();
 //   return config;
 // })
-
 
 // // 响应拦截
 // axios.interceptors.response.use((response: AxiosResponse<any>) => {

@@ -1,21 +1,27 @@
 <template>
     <div class="slider-demo-block">
         <div>
-            <el-slider range :min="props.min" :max="props.max" v-model="range" @change="$emit('change', range)"></el-slider>
+            <ElSlider v-model="range" range :min="props.min" :max="props.max" @change="$emit('change', range)" />
         </div>
         <div>
-            <el-input-number size="small" :step-strictly="true" v-model="range[0]" :min="props.min" :max="range[1]"
-                :value-on-clear="props.min" @change="$emit('change', range)">
-            </el-input-number>
+            <ElInputNumber
+                v-model="range[0]" size="small" step-strictly :min="props.min" :max="range[1]"
+                :value-on-clear="props.min" @change="$emit('change', range)"
+            />
             {{ text }}
-            <el-input-number size="small" :step-strictly="true" v-model="range[1]" :min="range[0]" :max="props.max"
-                :value-on-clear="props.max" @change="$emit('change', range)">
-            </el-input-number>
+            <ElInputNumber
+                v-model="range[1]" size="small" step-strictly :min="range[0]" :max="props.max"
+                :value-on-clear="props.max" @change="$emit('change', range)"
+            />
         </div>
     </div>
 </template>
 
 <script setup lang="ts" name="RangeSlider">
+import '@/styles/vendors/element-plus-slider.css';
+
+import { ElInputNumber, ElSlider } from 'element-plus';
+import type { PropType } from 'vue';
 
 const props = defineProps({
     min: {
@@ -28,13 +34,13 @@ const props = defineProps({
     },
     text: {
         type: String,
-        default: "",
+        default: '',
     },
 });
 
-const range = defineModel();
-
 defineEmits(['change']);
+
+const range = defineModel({ type: Array as PropType<number[]>, required: true });
 </script>
 
 <style scoped>

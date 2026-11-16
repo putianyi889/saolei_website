@@ -1,175 +1,272 @@
 <template>
-    <span @click.stop>
-        <el-popover v-if="render" :visible="visible" placement="bottom" width="298px"
-            popper-class="max-h-300px overflow-auto" @show="pop_show" @hide="pop_hide" popper-style="z-index:888;">
-            <div>
-                <div style="width: 80px;float: left;line-height: 200%;">
-                    <el-image style="width: 72px; height: 72px;margin-top: 10px;border-radius: 8px;" :src="image_url"
-                        :fit="'cover'" />
-                    <el-button style="width: 72px;height: 24px;" @click="visit_me(+id);">我的空间</el-button>
-                </div>
-                <div style="width: 188px;float: right;text-align: center;line-height: 180%;" v-loading="is_loading">
-                    <div><strong>{{ realname }}</strong> (id: {{ id }})</div>
-                    <div>初级纪录：<PreviewNumber :id="+b_t_id" :text="ms_to_s(b_t)">
-                        </PreviewNumber> | <PreviewNumber :id="+b_bvs_id" :text="to_fixed_n(b_bvs, 3)">
-                        </PreviewNumber>
+    <BaseTooltip ref="tooltip" class="player-name-root" :append-to="appendMedalTooltip" :before-show="allowMedalTooltip" interactive :interactive-border="12" :show-delay="200" :show-animation="0" :hide-animation="0">
+        <span class="player-name" :title="nameTitle" @click="interactive && $event.stopPropagation()" @pointerenter="pointerOver = true" @pointerleave="pointerOver = false">
+            <RouterLink v-if="interactive" :to="playerProfileTo" class="link link--no-underline text">
+                <PlayerBadge :user-id="userId" :name="nameShown" :show-avatar="local.playerNameShowAvatar" />
+            </RouterLink>
+            <PlayerBadge v-else :user-id="userId" :name="nameShown" :show-avatar="local.playerNameShowAvatar" />
+            <MemorialBadge v-if="user.id === userId && user.is_memorial" />
+        </span>
+        <template #content>
+            <div class="player-name-medals" @pointerleave="activeMedalKey = ''">
+                <span v-for="grant in shownGrants" :key="grant.key" class="medal-hit" @pointerenter="activeMedalKey = grant.key">
+                    <MedalArt :series="grant.series" :code="grant.code" :stage="grant.stage" :size="32" />
+                </span>
+                <div v-if="activeCaption" class="medal-caption">
+                    <div class="medal-caption-title">
+                        {{ activeCaption.title }}
                     </div>
-                    <div>中级纪录：<PreviewNumber :id="+i_t_id" :text="ms_to_s(i_t)">
-                        </PreviewNumber> | <PreviewNumber :id="+i_bvs_id" :text="to_fixed_n(i_bvs, 3)">
-                        </PreviewNumber>
+                    <div v-if="activeCaption.flavor" class="medal-caption-flavor">
+                        {{ activeCaption.flavor }}
                     </div>
-                    <div>高级纪录：<PreviewNumber :id="+e_t_id" :text="ms_to_s(e_t)">
-                        </PreviewNumber> | <PreviewNumber :id="+e_bvs_id" :text="to_fixed_n(e_bvs, 3)">
-                        </PreviewNumber>
-                    </div>
-                    <div>总计纪录：
-                        <span style="color: #BF9000;font-weight: bold;">{{ ms_to_s(b_t + i_t + e_t) }}</span>
-                        |
-                        <span style="color: #BF9000;font-weight: bold;">{{ to_fixed_n(b_bvs + i_bvs + e_bvs, 3)
-                            }}</span>
+                    <div v-if="activeCaption.meaning" class="medal-caption-line">
+                        {{ activeCaption.meaning }}
                     </div>
                 </div>
-
             </div>
-            <template #reference>
-                <el-link :underline="false" @click="visible = !visible;">{{ data.user_name }}</el-link>
-            </template>
-        </el-popover>
-        <el-link v-else :underline="false" @click="render = true; visible = true;">{{ data.user_name }}</el-link>
-    </span>
+        </template>
+    </BaseTooltip>
 </template>
 
 <script setup lang="ts" name="PlayerName">
-// 用户的名字，鼠标移上去以后弹出气泡框，可以访问他的主页
-import { ref } from "vue";
-import useCurrentInstance from "@/utils/common/useCurrentInstance";
-const { proxy } = useCurrentInstance();
-import image_url_default from '@/assets/person.png';
-const image_url = ref(image_url_default);
-// import PreviewDownload from '@/components/PreviewDownload.vue';
-import PreviewNumber from '@/components/PreviewNumber.vue';
-import { useRouter } from 'vue-router'
-import { ms_to_s, to_fixed_n } from "@/utils"
-const router = useRouter()
-import { useUserStore } from '../store'
-const store = useUserStore()
+import '@/styles/link.css';
+import { computed, nextTick, onUnmounted, ref, useTemplateRef, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { RouterLink } from 'vue-router';
 
+import BaseTooltip from '@/components/common/BaseTooltip.vue';
+import MemorialBadge from '@/components/widgets/MemorialBadge.vue';
+import PlayerBadge from '@/components/widgets/PlayerBadge.vue';
+import type { MedalStateRecord } from '@/services/medalService';
+import { cachedPlayerMedalState, fetchPlayerMedalState, medalCaption, medalSeriesFromCode, medalStateVersions } from '@/services/medalService';
+import { fetchUserInfo, userInfoRevision } from '@/services/userService';
+import { local } from '@/store/local';
+import { formatName } from '@/utils/strings';
+import { UserProfile } from '@/utils/userprofile';
+import MedalArt from '@/views/UserView/MedalArt.vue';
 
-const data = defineProps({
-    user_id: {
+const props = defineProps({
+    interactive: { type: Boolean, default: true },
+    userId: {
         type: Number,
+        default: 0,
     },
-    user_name: {
-        type: String,
-    },
-})
+});
 
-const render = ref<Boolean>(false); // 控制只渲染一次
-const visible = ref<Boolean>(false);
-const is_loading = ref(true);
+// 榜上快速划过时，后打开的名字关掉先打开的，避免多块勋章提示叠在一起。
+let closeOpenNameMedals: (() => void) | null = null;
 
-const realname = ref("");
-const id = ref("");
-const b_t = ref(999999);
-const b_bvs = ref("");
-const b_t_id = ref("");
-const b_bvs_id = ref("");
-const i_t = ref(999999);
-const i_bvs = ref("");
-const i_t_id = ref("");
-const i_bvs_id = ref("");
-const e_t = ref(999999);
-const e_bvs = ref("");
-const e_t_id = ref("");
-const e_bvs_id = ref("");
+function appendMedalTooltip() {
+    return document.body;
+}
 
-const pop_show = async () => {
-    document.addEventListener('mousedown', handleOutsideClick);
-    is_loading.value = true;
+function claimNameMedals(close: () => void) {
+    if (closeOpenNameMedals && closeOpenNameMedals !== close) closeOpenNameMedals();
+    closeOpenNameMedals = close;
+}
 
-    image_url.value = image_url_default;
-    realname.value = "";
-    id.value = "";
+function releaseNameMedals(close: () => void) {
+    if (closeOpenNameMedals === close) closeOpenNameMedals = null;
+}
 
-    await proxy.$axios.get('/msuser/info_abstract/',
-        {
-            params: {
-                id: data.user_id,
-            }
+const user = ref(new UserProfile());
+const loading = ref(false);
+const medalGrants = ref<MedalStateRecord[]>([]);
+const medalReady = ref(false);
+const medalLoading = ref(false);
+const medalShown = ref(false);
+const pointerOver = ref(false);
+const activeMedalKey = ref('');
+let medalLoadToken = 0;
+let medalUserId = props.userId;
+const tooltip = useTemplateRef<{ show: () => void; hide: () => void }>('tooltip');
+const internationalName = computed(() => {
+    const { firstname, lastname } = user.value;
+    return firstname && lastname ? formatName(firstname, lastname, local.value.nameFormat) : firstname || lastname;
+});
+function nameFor(source: typeof local.value.playerName1): string {
+    return source === 'international' ? internationalName.value : user.value[source];
+}
+const nameShown = computed(() => {
+    if (props.userId === 0) return '';
+    if (user.value.isNameHidden) return user.value.username || `${t('local.user')}#${props.userId}`;
+    if (loading.value || user.value.id !== props.userId) return `${t('local.user')}#${props.userId}`;
+    const name1 = nameFor(local.value.playerName1) || user.value.username || `${t('local.user')}#${props.userId}`;
+    const name2 = nameFor(local.value.playerName2);
+    return local.value.playerNameFormat === 'name1 (name2)' && name2 ? `${name1} (${name2})` : name1;
+});
+const nameTitle = computed(() => (user.value.isNameHidden
+    ? `${user.value.username || t('local.user')}#${props.userId}`
+    : [
+        `${user.value.username || '--'}#${props.userId}`,
+        `${user.value.realname || '--'} (${internationalName.value || '--'})`,
+    ].join('\n')));
+const playerProfileTo = computed(() => `/player/${props.userId}`);
+const shownGrants = computed(() => medalGrants.value.flatMap((grant) => {
+    const series = medalSeriesFromCode(grant.code);
+    if (!series || grant.stage <= 0) return [];
+    // 悬停只画勋章。timestamp 为空时不格式化时间。
+    return [{ key: `${grant.code}:${grant.scope}`, series, code: grant.code, stage: grant.stage }];
+}));
+function resetMedalView() {
+    medalLoadToken += 1;
+    medalLoading.value = false;
+    medalShown.value = false;
+    medalReady.value = false;
+    medalGrants.value = [];
+    activeMedalKey.value = '';
+}
+function allowMedalTooltip() {
+    // 没有结果就取消这次弹出；读完后若指针还在名字上，再由 showMedalsIfHovering 打开。
+    if (props.userId === 0) return false;
+    if (!medalReady.value && !medalLoading.value) {
+        const cached = cachedPlayerMedalState(props.userId);
+        if (cached !== undefined) {
+            medalGrants.value = cached;
+            medalReady.value = true;
         }
-    ).then(function (response) {
-
-        const response_data = response.data;
-        id.value = data.user_id + "";
-        realname.value = response_data.realname;
-        if (response_data.avatar) {
-            image_url.value = "data:image/;base64," + response_data.avatar;
+    }
+    if (!medalReady.value) {
+        if (!medalLoading.value) void loadHoveredMedalState();
+        return false;
+    }
+    if (!shownGrants.value.length) return false;
+    medalShown.value = true;
+    claimNameMedals(closeOurMedals);
+}
+async function loadHoveredMedalState(force = false) {
+    const { userId } = props;
+    if (userId === 0 || (medalLoading.value && !force)) return;
+    const token = ++medalLoadToken;
+    medalLoading.value = true;
+    try {
+        const grants = await fetchPlayerMedalState(userId);
+        if (token !== medalLoadToken || props.userId !== userId) return;
+        medalGrants.value = grants;
+        medalReady.value = true;
+        if (!shownGrants.value.length) {
+            medalShown.value = false;
+            tooltip.value?.hide();
+            return;
         }
-
-        const records = JSON.parse(response_data.record_abstract)
-
-        b_t.value = records.timems[0]
-        i_t.value = records.timems[1]
-        e_t.value = records.timems[2]
-
-        b_t_id.value = records.timems_id[0]
-        i_t_id.value = records.timems_id[1]
-        e_t_id.value = records.timems_id[2]
-        b_bvs.value = records.bvs[0]
-        i_bvs.value = records.bvs[1]
-        e_bvs.value = records.bvs[2]
-        b_bvs_id.value = records.bvs_id[0]
-        i_bvs_id.value = records.bvs_id[1]
-        e_bvs_id.value = records.bvs_id[2]
-
-        is_loading.value = false;
-    }).catch(() => {
-        // is_loading.value = false;
-    })
-
-
-
-}
-
-// 用户记录小弹窗关闭后，删除其中的数据
-const pop_hide = () => {
-    document.removeEventListener('mousedown', handleOutsideClick);
-    image_url.value = image_url_default;
-    realname.value = "";
-    id.value = "";
-    i_t.value = "";
-    b_t.value = "";
-    e_t.value = "";
-    b_t_id.value = "";
-    i_t_id.value = "";
-    e_t_id.value = "";
-    b_bvs.value = "";
-    i_bvs.value = "";
-    e_bvs.value = "";
-    b_bvs_id.value = "";
-    i_bvs_id.value = "";
-    e_bvs_id.value = "";
-    is_loading.value = true;
-}
-
-const visit_me = (user_id: Number) => {
-    // proxy.$store.commit('updatePlayer', { "id": id.value, "realname":realname.value });
-    // localStorage.setItem("player", JSON.stringify({ "id": id.value, "realname":realname.value }));
-    // localStorage.setItem("player", JSON.stringify({ "id": id.value }));
-    store.player.id = +id.value;
-    router.push(`player\/${store.player.id}`)
-}
-
-// 实现点旁边时候关闭气泡
-const handleOutsideClick = (event: any) => {
-    const componentElement = document.querySelector('.el-popover');
-    if (!componentElement?.contains(event.target)) {
-        visible.value = false;
+        await showMedalsIfHovering();
+    } catch (error) {
+        console.log(error);
+        if (token === medalLoadToken && props.userId === userId) medalReady.value = true;
+    } finally {
+        if (token === medalLoadToken) medalLoading.value = false;
     }
 }
+function closeOurMedals() {
+    activeMedalKey.value = '';
+    tooltip.value?.hide();
+    releaseNameMedals(closeOurMedals);
+}
+async function showMedalsIfHovering() {
+    if (!pointerOver.value || !shownGrants.value.length) return;
+    await nextTick();
+    if (!pointerOver.value) return;
+    claimNameMedals(closeOurMedals);
+    tooltip.value?.show();
+}
+onUnmounted(closeOurMedals);
+watch(() => [props.userId, userInfoRevision(props.userId)] as const, async ([newVal], _, onCleanup) => {
+    let active = true;
+    onCleanup(() => {
+        active = false;
+    });
+    user.value = new UserProfile();
+    loading.value = newVal !== 0;
+    if (newVal === 0) return;
+    try {
+        const result = await fetchUserInfo(newVal);
+        if (active) user.value = result;
+    } catch (error) {
+        console.log(error);
+    } finally {
+        if (active) loading.value = false;
+    }
+}, { immediate: true });
+watch(() => props.userId, (userId) => {
+    medalUserId = userId;
+    resetMedalView();
+    closeOurMedals();
+});
+// 版本变化时，没打开过提示的名字留到下次悬停；打开过或正在读的才重取。
+watch(() => medalStateVersions[props.userId], () => {
+    if (props.userId !== medalUserId) return;
+    if (props.userId === 0 || (!medalShown.value && !medalLoading.value)) {
+        medalLoadToken += 1;
+        medalLoading.value = false;
+        medalReady.value = false;
+        medalGrants.value = [];
+        return;
+    }
+    void loadHoveredMedalState(true);
+});
 
+const i18nMessages = {
+    'zh-cn': { local: {
+        user: '用户',
+    } },
+    en: { local: {
+        user: 'User',
+    } },
+};
 
-
+const { t, locale } = useI18n({ messages: i18nMessages });
+const activeCaption = computed(() => {
+    const grant = shownGrants.value.find((item) => item.key === activeMedalKey.value);
+    return grant ? medalCaption(grant.series, grant.code, grant.stage, locale.value) : null;
+});
 </script>
 
-<style lang="less" scoped></style>
+<style scoped lang="less">
+/* 组件放进普通文字流时按文本基线对齐：全局 :where(span)、.link 和 .text 都会把
+   行内盒子设为 vertical-align: middle，使名称相对周围文字偏下。头像单独做视觉居中，
+   不参与基线计算。 */
+.player-name-root,
+.player-name {
+    vertical-align: baseline;
+}
+
+.player-name :deep(a) {
+    display: inline;
+    vertical-align: baseline;
+}
+
+.player-name :deep(span) {
+    overflow-wrap: anywhere;
+    vertical-align: baseline;
+}
+
+.player-name :deep(img) {
+    vertical-align: middle;
+}
+
+.player-name-medals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-width: 280px;
+}
+
+.medal-hit {
+    display: inline-flex;
+    cursor: default;
+}
+
+.medal-caption {
+    flex-basis: 100%;
+}
+
+.medal-caption-title {
+    color: var(--ui-text-color-primary);
+}
+
+.medal-caption-flavor,
+.medal-caption-line {
+    color: var(--ui-text-color-secondary);
+    font-size: var(--ui-font-size-small);
+}
+</style>

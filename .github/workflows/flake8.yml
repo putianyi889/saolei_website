@@ -1,0 +1,45 @@
+name: Back-end Code Style Check
+
+on:
+  push:
+    branches:
+      - main  # Adjust the branch name as needed
+  pull_request:
+    paths: 
+      - 'back_end/saolei/**'
+      - '.github/workflows/flake8.yml'
+
+jobs:
+  check_flag:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: back_end/saolei
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      
+    - name: Install Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.10'  # Choose the Python version you want to use
+
+    - name: Install Dependencies
+      run: |
+        pip install flake8
+        pip install flake8-bugbear
+        pip install flake8-builtins
+        pip install flake8-commas
+        pip install flake8-comprehensions
+        pip install flake8-datetimez
+        pip install flake8-encodings
+        pip install flake8-implicit-str-concat
+        pip install flake8-import-order
+        pip install flake8-multiline-containers
+        pip install flake8-print
+        pip install flake8-quotes
+
+    - name: Run Tests
+      run: |
+        python -m flake8

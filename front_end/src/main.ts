@@ -1,54 +1,36 @@
-import { createApp } from 'vue'
-import * as ELIcons from '@element-plus/icons-vue';
-
-import App from './App.vue'
-import router from './router'
-// import store from './store'
-import { createPinia } from 'pinia'
-import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
-import i18n from '@/i18n'
-import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
-import $axios from './http'
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
-// 全局挂载axios
-
-import 'highlight.js/styles/stackoverflow-light.css'
-import 'element-plus/theme-chalk/dark/css-vars.css'
-
-
-const app = createApp(App)
-const pinia = createPinia()
-pinia.use(piniaPluginPersistedstate)
-
-app.config.globalProperties.$axios = $axios;
-
-
-for (const name in ELIcons) {
-  app.component(name, (ELIcons as any)[name]);
+function markOutdatedBrowser() {
+    document.documentElement.classList.add('outdated-browser');
 }
 
-app.use(ElementPlus);
-app.use(pinia).use(router).use(i18n);
-app.mount('#app');
+function errorText(error: unknown) {
+    if (typeof error === 'string') return error;
+    if (typeof error !== 'object' || error === null || !('message' in error)) return '';
 
-const win: any = window
-if (import.meta.env.NODE_ENV === 'development') {
-  if ('__VUE_DEVTOOLS_GLOBAL_HOOK__' in win) {
-    win.__VUE_DEVTOOLS_GLOBAL_HOOK__.Vue = app
-  }
+    const { message } = error;
+    const stack = 'stack' in error ? error.stack : '';
+    const messageText = typeof message === 'string' ? message : '';
+    const stackText = typeof stack === 'string' ? stack : '';
+    return `${messageText}\n${stackText}`;
 }
 
-
-declare module '@vue/runtime-core' {
-  interface ComponentCustomProperties {
-    $axios: AxiosInstance;
-  }
+function isSupportedBrowser() {
+    return typeof Array.prototype.toReversed === 'function'
+        && typeof Promise.withResolvers === 'function';
 }
 
-// cloc-1.94.exe .\开源扫雷网 -exclude-dir=node_modules
-// "ms-toollib": "file:../../ms_toollib/wasm/pkg",
+function isUnsupportedBrowserError(error: unknown) {
+    const text = errorText(error);
+    if (!text.includes('is not a function')) return false;
+    return text.includes('toReversed') || text.includes('withResolvers');
+}
 
-// git remote set-url origin https://gitee.com/ee55/saolei_website.git
-// git push -f origin main
-
+// 站点依赖 Array.prototype.toReversed 与 Promise.withResolvers。
+// 旧浏览器在启动时会抛出 `… is not a function`，页面会停在「1/3 正在加载资源」。
+if (isSupportedBrowser()) {
+    void import('./bootstrap').catch((error: unknown) => {
+        if (isUnsupportedBrowserError(error)) markOutdatedBrowser();
+        console.error(error);
+    });
+} else {
+    markOutdatedBrowser();
+}

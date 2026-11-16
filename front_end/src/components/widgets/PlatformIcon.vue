@@ -1,16 +1,24 @@
 <template>
-    <el-link :href="platformlist[platform].url" target="_blank" style="vertical-align: bottom;">
-        {{ platformlist[platform].name }}
-    </el-link>
+    <a class="link text" :href="platformlist[platform].url" target="_blank" rel="noopener noreferrer" style="vertical-align: baseline;">
+        {{ t(`platform.${platform}`) }}
+    </a>
 </template>
 
 <script setup lang="ts">
-import { platformlist } from '@/utils/common/accountLinkPlatforms';
+import '@/styles/link.css';
 
-const data = defineProps({
+import type { PropType } from 'vue';
+import { useI18n } from 'vue-i18n';
+
+import { platformlist } from '@/utils/accountlinks';
+import type { AccountLinkPlatform } from '@/utils/accountlinks';
+
+defineProps({
     platform: {
-        type: String,
-        default: "",
+        type: String as PropType<AccountLinkPlatform>,
+        required: true,
     },
 });
+
+const { t } = useI18n();
 </script>

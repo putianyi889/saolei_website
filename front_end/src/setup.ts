@@ -1,0 +1,10 @@
+import 'element-plus/dist/index.css';
+import 'element-plus/theme-chalk/dark/css-vars.css';
+import './styles/theme/index.css';
+import './styles/theme/tables.css';
+import './styles/text.css';
+import './styles/checkbox.css';
+import './styles/checkbox-buttons.css';
+import './styles/switch.css';
+import './styles/select.css';
+import './styles/slider.css';

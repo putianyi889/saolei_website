@@ -1,0 +1,132 @@
+:root {
+    --vp-c-brand-1: #2f8fda;
+    --vp-c-brand-2: #2277ba;
+    --vp-c-brand-3: #79b6df;
+    --vp-home-hero-name-color: #2277ba;
+    --ifm-background-surface-color: var(--vp-c-bg);
+    --ifm-color-emphasis-100: var(--vp-c-bg-soft);
+    --ifm-color-emphasis-300: var(--vp-c-divider);
+    --ifm-font-color-base: var(--vp-c-text-1);
+}
+
+.dark {
+    --vp-c-brand-1: #79b6df;
+    --vp-c-brand-2: #5aa8d6;
+    --vp-c-brand-3: #2f8fda;
+}
+
+.vp-doc details {
+    margin: 16px 0;
+    border: 1px solid var(--vp-c-divider);
+    border-radius: 8px;
+    background: var(--vp-c-bg-soft);
+    transition:
+        border-color 0.2s ease,
+        background-color 0.2s ease;
+}
+
+.vp-doc details[open] {
+    border-color: var(--vp-c-brand-3);
+}
+
+.vp-doc summary {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 10px 16px;
+    color: var(--vp-c-text-1);
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+
+.vp-doc summary::-webkit-details-marker {
+    display: none;
+}
+
+.vp-doc summary::before {
+    content: "";
+    width: 0;
+    height: 0;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 7px solid var(--vp-c-text-2);
+    transition: transform 0.2s ease;
+}
+
+.vp-doc details[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.vp-doc summary:hover {
+    color: var(--vp-c-brand-1);
+}
+
+.vp-doc details > :not(summary) {
+    margin-right: 20px;
+    margin-left: 20px;
+}
+
+.vp-doc details > :nth-child(2) {
+    margin-top: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc details > :last-child {
+    margin-bottom: 20px;
+}
+
+.vp-doc .mermaid-diagram {
+    position: relative;
+    margin: 24px 0;
+    padding: 16px;
+    overflow-x: auto;
+    border: 1px solid var(--vp-c-divider);
+    border-radius: 8px;
+    background: var(--vp-c-bg-soft);
+}
+
+.vp-doc .mermaid-diagram__body {
+    width: 100%;
+    text-align: center;
+}
+
+.vp-doc .mermaid-diagram__body svg {
+    display: inline-block;
+}
+
+.vp-doc .mermaid-diagram__error {
+    padding: 16px;
+    color: var(--vp-c-danger-1);
+    white-space: pre-wrap;
+}
+
+.mermaid-modal-content {
+    background: var(--vp-c-bg) !important;
+}
+
+.mermaid-modal-close {
+    background: var(--vp-c-bg) !important;
+    border-color: var(--vp-c-divider) !important;
+    color: var(--vp-c-text-1) !important;
+}
+
+.mermaidTooltip {
+    position: absolute !important;
+    z-index: 10020 !important;
+    max-width: min(320px, calc(100vw - 32px)) !important;
+    padding: 6px 8px !important;
+    border: 1px solid var(--vp-c-divider) !important;
+    border-radius: 6px !important;
+    background: var(--vp-c-bg-soft) !important;
+    box-shadow: var(--vp-shadow-2) !important;
+    color: var(--vp-c-text-1) !important;
+    font-size: 12px !important;
+    line-height: 1.5 !important;
+    pointer-events: none !important;
+    text-align: left !important;
+}

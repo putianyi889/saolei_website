@@ -1,11 +1,9 @@
-import { useVideoPlayerStore } from "@/store";
+import { videoplayerstore } from '@/store';
+import { getReplayPreviewUrl } from '@/utils/replayLinks';
 
-const videoplayerstore = useVideoPlayerStore();
-
-export const preview = (id: number | undefined) => {
-    if (!id) {
-        return;
-    }
+export function preview(id: number | undefined | null): void {
+    if (id === undefined || id === null || id <= 0) return;
     videoplayerstore.id = id;
+    videoplayerstore.url = getReplayPreviewUrl(id);
     videoplayerstore.visible = true;
 }

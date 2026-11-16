@@ -11,29 +11,36 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import os
 from pathlib import Path
-import os, json
-import warnings
 
-# https://docs.djangoproject.com/en/5.0/ref/settings/#std-setting-DEBUG
-DEBUG = True
+from utils.secrets_json import read_secret
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# https://docs.djangoproject.com/en/5.0/ref/settings/#std-setting-DEBUG
+# 在 git 仓库的上一层放 .production 文件则自动设为生产环境
+PRODUCTION_MARK = BASE_DIR.parent.parent.parent / '.production'
+DEBUG = not PRODUCTION_MARK.exists()
+
+
+def _read_project_secret(key: str, default: str = '') -> str:
+    try:
+        return str(read_secret(key, default)).strip()
+    except Exception:
+        return default
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # 与加密的盐有关！
-try:
-    with open("secrets.json",'r') as f:
-        SECRET_KEY = json.load(f)["django_secret_key"]
-except:
-    SECRET_KEY = "django-insecure-3_(yjnup(rsxz&pd@stz25*meq10bn3m3$lt!n_1+s723#k=ay"
+SECRET_KEY = _read_project_secret('django_secret_key')
+if not SECRET_KEY:
+    SECRET_KEY = 'django-insecure-3_(yjnup(rsxz&pd@stz25*meq10bn3m3$lt!n_1+s723#k=ay'
 
-# ALLOWED_HOSTS = ["*"]
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = ['*']
 
 # 自定义404、500错误页面
 # handler404 = 'fault_page.views.page_not_found'
@@ -42,54 +49,66 @@ ALLOWED_HOSTS = ["*"]
 # Application definition
 
 INSTALLED_APPS = [
-    "captcha",
-    "django.contrib.admin",
-    "django.contrib.auth",
-    "django.contrib.contenttypes",
-    "django.contrib.sessions",
-    "django.contrib.messages",
-    "django.contrib.staticfiles",
+    'captcha',
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
     'django_apscheduler',
-    'corsheaders',
+    'django_tasks_db',
+    *(['corsheaders'] if DEBUG else []),
     'userprofile',
     'videomanager',
     'msuser',
     'article',
-    "ranking",
+    'customranking',
+    'minigame',
+    'speedranking',
+    'effranking',
     'identifier',
     'accountlink',
-    "monitor",
-    'django_cleanup.apps.CleanupConfig', # 必须放在最后(文档所言)
+    'tournament',
+    'monitor',
+    'common',
+    'medal',
+    'news',
+    'media',
+    'django_cleanup.apps.CleanupConfig',  # 必须放在最后(文档所言)
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',   # 允许跨域请求
-    "django.middleware.security.SecurityMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.middleware.common.CommonMiddleware",
-    # "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    *(['corsheaders.middleware.CorsMiddleware'] if DEBUG else []),
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'ninja.compatibility.files.fix_request_files_middleware',  # Parse PATCH/PUT form bodies.
+    'django.middleware.common.CommonMiddleware',
+    # 'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'utils.ranking_lock.TopRankingWriteMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'django_ratelimit.middleware.RatelimitMiddleware',
+    'django.middleware.gzip.GZipMiddleware',
 ]
 
-ROOT_URLCONF = "saolei.urls"
+ROOT_URLCONF = 'saolei.urls'
 
-RATELIMIT_VIEW = "utils.response.ratelimited_error"
+RATELIMIT_VIEW = 'utils.response.ratelimited_error'
 
 TEMPLATES = [
     {
-        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
         'DIRS': [BASE_DIR / 'dist', BASE_DIR / 'templates'],
 
-        "APP_DIRS": True,
-        "OPTIONS": {
-            "context_processors": [
-                "django.template.context_processors.debug",
-                "django.template.context_processors.request",
-                "django.contrib.auth.context_processors.auth",
-                "django.contrib.messages.context_processors.messages",
+        'APP_DIRS': True,
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.debug',
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
             ],
         },
     },
@@ -97,10 +116,10 @@ TEMPLATES = [
 
 # python3 manage.py collectstatic会将些位置下的文件自动放到服务器上的STATIC_ROOT位置
 STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, "dist/"),
+    os.path.join(BASE_DIR, 'dist/'),
 ]
 
-WSGI_APPLICATION = "saolei.wsgi.application"
+WSGI_APPLICATION = 'saolei.wsgi.application'
 
 SECURE_CONTENT_TYPE_NOSNIFF = False
 
@@ -108,16 +127,22 @@ SECURE_CONTENT_TYPE_NOSNIFF = False
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": "saolei",
-        "USER": "root",
-        "PASSWORD": "123456",
-        "HOST": "127.0.0.1",
-        #'HOST': 'mysql',   # docker-compose 中的服务名称
-        "PORT": "3306",
-        'CONN_MAX_AGE':None
-    }
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'saolei',
+        'USER': 'root',
+        'PASSWORD': '123456',
+        'HOST': '127.0.0.1',
+        # 'HOST': 'mysql',   # docker-compose 中的服务名称
+        'PORT': '3306',
+        'CONN_MAX_AGE': 60,
+        'CONN_HEALTH_CHECKS': True,
+        'OPTIONS': {
+            'connect_timeout': 5,
+            'read_timeout': 15,
+            'write_timeout': 15,
+        },
+    },
 }
 
 DEFAULT_CHARSET = 'utf-8'
@@ -127,26 +152,33 @@ DEFAULT_CHARSET = 'utf-8'
 
 AUTH_PASSWORD_VALIDATORS = [
     {
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
     },
     {
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
     },
     {
-        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
     },
     {
-        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+TASKS = {
+    'default': {
+        'BACKEND': 'django_tasks_db.DatabaseBackend',
+        'QUEUES': ['default'],
+    },
+}
 
 
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
 
-LANGUAGE_CODE = "en-us"
+LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = "UTC"
+TIME_ZONE = 'UTC'
 
 USE_I18N = True
 
@@ -156,8 +188,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = "/static/"
-# STATIC_URL = "/"
+STATIC_URL = '/static/'
+# STATIC_URL = '/'
 # 服务器上的位置，存放网页文件、播放器文件、文章
 STATIC_ROOT = Path('/root/saolei/static')
 
@@ -168,7 +200,7 @@ if DEBUG:
     # 本地调试时，录像和头像会放到saolei_website\back_end\saolei\assets下
     # 例如saolei_website\back_end\saolei\assets\videos\20200504\ms.avf
     # saolei_website\back_end\saolei\assets\avatar\20200504\pic.jpg
-    MEDIA_ROOT = BASE_DIR / "assets"
+    MEDIA_ROOT = BASE_DIR / 'assets'
 else:
     # 服务器上存放录像、头像的位置
     MEDIA_ROOT = Path('/root/saolei/media')
@@ -176,8 +208,7 @@ else:
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # 格式
@@ -195,7 +226,7 @@ CAPTCHA_LENGTH = 4
 # 超时(minutes)
 CAPTCHA_TIMEOUT = 15
 # 文字倾斜
-CAPTCHA_LETTER_ROTATION = (-10,10)
+CAPTCHA_LETTER_ROTATION = (-10, 10)
 # 背景颜色
 CAPTCHA_BACKGROUND_COLOR = '#FFFFFF'
 # 文字颜色
@@ -208,9 +239,11 @@ CAPTCHA_CHALLENGE_FUNCT = 'captcha.helpers.random_char_challenge'
 
 
 if DEBUG:
+    # Development and Cypress access Django directly; production CORS lives in Nginx.
     CORS_ALLOW_CREDENTIALS = True
     CORS_ALLOW_ALL_ORIGINS = True
-    CORS_ALLOW_HEADERS = ('*')
+    CORS_EXPOSE_HEADERS = ['Content-Disposition', 'X-Replay-Container-Version', 'X-Minigame-Score']
+    # Use django-cors-headers' defaults, including content-type and x-csrftoken.
     CSRF_TRUSTED_ORIGINS = ['http://localhost:8080']
 
 if DEBUG:
@@ -226,54 +259,83 @@ else:
     CSRF_COOKIE_SAMESITE = 'Lax'
     CSRF_COOKIE_SECURE = True     # https时候改成True
 
-# 发送邮箱验证码
-EMAIL_HOST = "smtp.88.com"     # 服务器
-EMAIL_PORT = 25                 # 一般情况下都为25
-EMAIL_HOST_USER = "wangjianing@88.com"     # 账号
-EMAIL_HOST_PASSWORD = "TdS2ZPt2izAkY25b"   # 密码 (注意：这里的密码指的是授权码)
-# EMAIL_USE_SSL = True
-# EMAIL_FROM = "wangjianing@88.com"      # 邮箱来自
+# 发送邮箱验证码（敏感凭据从 secrets.json 读取，不要写死在代码里）
+EMAIL_HOST = _read_project_secret('email_host', 'smtpdm.aliyun.com')
+EMAIL_PORT = int(_read_project_secret('email_port', '465') or 465)
+EMAIL_HOST_USER = _read_project_secret('email_host_user', '')
+EMAIL_HOST_PASSWORD = _read_project_secret('email_host_password', '')
+EMAIL_USE_SSL = True
+EMAIL_TIMEOUT = 10              # 避免 SMTP 无响应时请求一直挂起
+DEFAULT_FROM_EMAIL = _read_project_secret('email_from', EMAIL_HOST_USER)
 
-SESSION_COOKIE_NAME = "session_id"        # Session的cookie保存在浏览器上时的key
-SESSION_COOKIE_PATH = "/"                # Session的cookie保存的路径(默认)
+SESSION_COOKIE_NAME = 'session_id'        # Session的cookie保存在浏览器上时的key
+SESSION_COOKIE_PATH = '/'                # Session的cookie保存的路径(默认)
 SESSION_COOKIE_DOMAIN = None             # Session的cookie保存的域名(默认)
 # SESSION_COOKIE_SECURE = False            # 是否Https传输cookie
 SESSION_COOKIE_HTTPONLY = True           # 是否Session的cookie只支持http传输(默认)
-SESSION_COOKIE_AGE = 1209600*2           # Session的cookie失效日期(默认2周)
-SESSION_SAVE_EVERY_REQUEST = False       # 是否设置关闭浏览器使得Session过期
+SESSION_COOKIE_AGE = 1209600 * 2           # Session的cookie失效日期(默认2周)
+SESSION_SAVE_EVERY_REQUEST = True       # 是否设置关闭浏览器使得Session过期
 SESSION_COOKIE_AT_BROWSER_CLOSE = False  # 是否每次请求都保存Session，默认修改之后才能保存
 
-AUTH_USER_MODEL='userprofile.UserProfile'
+AUTH_USER_MODEL = 'userprofile.UserProfile'
 
 CACHES = {
-    "saolei_website": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://127.0.0.1:6379",
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "SOCKET_CONNECT_TIMEOUT": 5,  # 连接redis超时时间，单位为秒
-            "SOCKET_TIMEOUT": 5,  # redis读写操作超时时间，单位为秒
-            # "CONNECTION_POOL_KWARGS": {"decode_responses": True,"encoding": "utf-8"},
-        }
+    'saolei_website': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379',
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'SOCKET_CONNECT_TIMEOUT': 5,  # 连接redis超时时间，单位为秒
+            'SOCKET_TIMEOUT': 5,  # redis读写操作超时时间，单位为秒
+            # 'CONNECTION_POOL_KWARGS': {'decode_responses': True,'encoding': 'utf-8'},
+        },
     },
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://127.0.0.1:6379/1",
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "SOCKET_CONNECT_TIMEOUT": 5,  # 连接redis超时时间，单位为秒
-            "SOCKET_TIMEOUT": 5,  # redis读写操作超时时间，单位为秒
-        }
-    }
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379/1',
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'SOCKET_CONNECT_TIMEOUT': 5,  # 连接redis超时时间，单位为秒
+            'SOCKET_TIMEOUT': 5,  # redis读写操作超时时间，单位为秒
+        },
+    },
 }
 # 会话存储方式二选一
-# SESSION_ENGINE = "django.contrib.sessions.backends.db"
-SESSION_ENGINE = "django.contrib.sessions.backends.cache"
-SESSION_CACHE_ALIAS = "saolei_website"
+# SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+SESSION_CACHE_ALIAS = 'saolei_website'
+
+# GitHub OAuth App: public identity linking only, no stored access token.
+GITHUB_OAUTH_CLIENT_ID = _read_project_secret('github_oauth_client_id')
+GITHUB_OAUTH_CLIENT_SECRET = _read_project_secret('github_oauth_client_secret')
+GITHUB_OAUTH_REDIRECT_URI = _read_project_secret('github_oauth_redirect_uri')
+GITHUB_OAUTH_FRONTEND_URL = os.environ.get('GITHUB_OAUTH_FRONTEND_URL', 'http://localhost:8080' if DEBUG else 'https://openms.top')
 
 
-APSCHEDULER_DATETIME_FORMAT = "N j, Y, f:s a" # 定时任务格式
+APSCHEDULER_DATETIME_FORMAT = 'N j, Y, f:s a'  # 定时任务格式
 APSCHEDULER_RUN_NOW_TIMEOUT = 25  # 定时任务最大执行时间，秒
+
+MINERACER_START_URL = os.environ.get('MINERACER_ACCOUNT_LINK_START_URL', 'https://mineracer.com/api/partner/link/start')
+MINERACER_POLL_URL = os.environ.get('MINERACER_ACCOUNT_LINK_POLL_URL', 'https://mineracer.com/api/partner/link/poll')
+MINERACER_TIMEOUT = float(os.environ.get('MINERACER_ACCOUNT_LINK_TIMEOUT', '5'))
+MINERACER_POLL_INTERVAL_MS = max(1, int(os.environ.get('MINERACER_ACCOUNT_LINK_POLL_INTERVAL_MS', '2500')))
+
+# 95经典扫雷外部应用绑定。api_key 存 secrets.json 的 classic_bind_api_key，
+# 回调验签密钥存 classic_callback_app_secret；回调地址必须是对方报备白名单内的 https 域名。
+# 发起绑定同步等待对方受理，网关为该路径预留 8s（default.conf）。
+# CLASSIC_TIMEOUT 是整次调用的截止时间，必须短于网关预算，否则浏览器会先收到 504。
+CLASSIC_BIND_URL = os.environ.get('CLASSIC_BIND_URL', 'https://mg.xiean.net:6789/v1/ext/bind/request')
+CLASSIC_BIND_CALLBACK_URL = os.environ.get('CLASSIC_BIND_CALLBACK_URL', 'https://openms.top/api/accountlink/classic/callback')
+CLASSIC_BIND_EXPIRES_IN = min(604800, max(60, int(os.environ.get('CLASSIC_BIND_EXPIRES_IN', '86400'))))
+CLASSIC_TIMEOUT = float(os.environ.get('CLASSIC_BIND_TIMEOUT', '5'))
+CLASSIC_CONNECT_TIMEOUT = min(CLASSIC_TIMEOUT, float(os.environ.get('CLASSIC_BIND_CONNECT_TIMEOUT', '2')))
+CLASSIC_CALLBACK_TOLERANCE_SECONDS = 300
+
+
+# WOM（Minesweeper.Online）公开资料。令牌存在 secrets.json 的 wom_api_token，不写入代码或环境变量。
+WOM_API_BASE_URL = os.environ.get('WOM_API_BASE_URL', 'https://api.lockhart.ren')
+WOM_API_TOKEN = _read_project_secret('wom_api_token')
+WOM_API_TIMEOUT = float(os.environ.get('WOM_API_TIMEOUT', '6'))
 
 LOGGING = {
     'version': 1,
@@ -289,48 +351,57 @@ LOGGING = {
         },
         'modulehistory': {
             'format': '%(asctime)s %(funcName)s %(levelname)s- %(message)s',
-            "datefmt": "%Y-%m-%d %H:%M:%S",
+            'datefmt': '%Y-%m-%d %H:%M:%S',
         },
-        "default": {
-            "format": '%(asctime)s %(name)s  %(pathname)s:%(lineno)d %(module)s:%(funcName)s '
+        'default': {
+            'format': '%(asctime)s %(name)s  %(pathname)s:%(lineno)d %(module)s:%(funcName)s '
                       '%(levelname)s- %(message)s',
-            "datefmt": "%Y-%m-%d %H:%M:%S"
+            'datefmt': '%Y-%m-%d %H:%M:%S',
         },
     },
     'handlers': {
         'console': {
             'level': 'DEBUG',
             'class': 'logging.StreamHandler',
-            'formatter': 'default'
+            'formatter': 'default',
         },
         'file': {
             'level': 'DEBUG',
             'class': 'logging.handlers.TimedRotatingFileHandler',
             'filename': os.path.join(BASE_DIR, 'logs/debug.log'),
-            'when': "D",
+            'when': 'D',
             'interval': 1,
-            'formatter': 'default'
+            'formatter': 'default',
         },
-        "request": {
+        'request': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'logs/request.log'),
-            'formatter': 'default'
+            'formatter': 'default',
         },
-        "server": {
+        'server': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'logs/server.log'),
-            'formatter': 'default'
+            'formatter': 'default',
         },
-        "root": {
+        'root': {
             'level': 'DEBUG',
             'class': 'logging.handlers.RotatingFileHandler',
             'filename': os.path.join(BASE_DIR, 'logs/root.log'),
             'formatter': 'default',
             'encoding': 'utf-8',
-            'maxBytes': 5242880 * 20, # 100M
+            'maxBytes': 5242880 * 20,  # 100M
             'backupCount': 5,
+        },
+        'accountlink': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs/accountlink.log'),
+            'formatter': 'modulehistory',
+            'encoding': 'utf-8',
+            'maxBytes': 5242880,  # 1M
+            'backupCount': 10,
         },
         'userprofile': {
             'level': 'INFO',
@@ -338,8 +409,8 @@ LOGGING = {
             'filename': os.path.join(BASE_DIR, 'logs/userprofile.log'),
             'formatter': 'modulehistory',
             'encoding': 'utf-8',
-            'maxBytes': 5242880, # 5M
-            'backupCount': 20,
+            'maxBytes': 5242880,  # 1M
+            'backupCount': 10,
         },
         'videomanager': {
             'level': 'INFO',
@@ -347,12 +418,41 @@ LOGGING = {
             'filename': os.path.join(BASE_DIR, 'logs/videomanager.log'),
             'formatter': 'modulehistory',
             'encoding': 'utf-8',
-            'maxBytes': 5242880, # 5M
-            'backupCount': 20,
+            'maxBytes': 5242880,  # 1M
+            'backupCount': 10,
+        },
+        'tournament': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs/tournament.log'),
+            'formatter': 'modulehistory',
+            'encoding': 'utf-8',
+            'maxBytes': 5242880,  # 1M
+            'backupCount': 10,
+        },
+        'media': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs/media.log'),
+            'formatter': 'modulehistory',
+            'encoding': 'utf-8',
+            'maxBytes': 5242880,  # 1M
+            'backupCount': 10,
         },
     },
     'loggers': {
+        # Authlib DEBUG logs can contain token exchange bodies and credentials.
+        'authlib': {
+            'level': 'WARNING',
+            'handlers': ['root'],
+            'propagate': False,
+        },
         # 应用中自定义日志记录器
+        'accountlink': {
+            'level': 'INFO',
+            'handlers': ['accountlink'],
+            'propagate': False,
+        },
         'videomanager': {
             'level': 'INFO',
             'handlers': ['videomanager'],
@@ -363,17 +463,33 @@ LOGGING = {
             'handlers': ['userprofile'],
             'propagate': False,
         },
+        'tournament': {
+            'level': 'INFO',
+            'handlers': ['tournament'],
+            'propagate': False,
+        },
+        'media': {
+            'level': 'INFO',
+            'handlers': ['media'],
+            'propagate': False,
+        },
     },
     'root': {
-        "level": "DEBUG",
-        "handlers": ["root"],
-    }
+        'level': 'DEBUG',
+        'handlers': ['root'],
+    },
 }
 
 SETTINGS_PATH = os.path.normpath(os.path.dirname(__file__))
 TEMPLATE_DIRS = (
-os.path.join(SETTINGS_PATH, 'templates'),
+    os.path.join(SETTINGS_PATH, 'templates'),
 )
 
+E2E_TEST = False or os.environ.get('E2E_TEST') == 'True'  # 是否为端到端测试模式。 End-to-end test mode.
 
+if E2E_TEST:
+    INSTALLED_APPS.append('dangerzone')
+    RATELIMIT_ENABLE = False  # 端到端测试时关闭限流。 Disable rate limiting in end-to-end test mode.
 
+EMAIL_SKIP = False or E2E_TEST  # 是否跳过邮箱验证。用于调试。 Skip the email verification.
+BAIDU_VERIFY_SKIP = False or E2E_TEST  # 是否跳过审查步骤。用于调试。 Skip censorship.

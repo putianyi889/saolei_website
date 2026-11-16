@@ -1,0 +1,48 @@
+<template>
+    <BaseTextButton :underline="underline" @click.stop="visible = true">
+        <slot />
+    </BaseTextButton>
+    <ElDialog v-if="visible" model-value width="100%" align-center body-class="center" :show-close="false" append-to-body :z-index="zIndex" @closed="visible=false">
+        <slot name="overlay" />
+        <template #header>
+            <h2 class="text-regular" style="justify-self: center;">
+                <slot name="header" />
+            </h2>
+        </template>
+    </ElDialog>
+</template>
+
+<script lang="ts" setup>
+import { ElDialog } from 'element-plus';
+import type { PropType } from 'vue';
+import { ref } from 'vue';
+
+import BaseTextButton from './BaseTextButton.vue';
+
+defineProps({
+    zIndex: {
+        type: Number,
+        default: undefined,
+    },
+    underline: {
+        type: String as PropType<'hover' | 'always' | 'never'>,
+        default: 'never',
+    },
+});
+
+defineSlots<{
+    default?: () => unknown;
+    overlay?: () => unknown;
+    header?: () => unknown;
+}>();
+
+const visible = ref(false);
+</script>
+
+<style scoped lang="less">
+.el-dialog.center {
+    justify-self: center;
+    align-items: center;
+    text-align: center;
+}
+</style>

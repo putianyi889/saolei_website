@@ -1,0 +1,65 @@
+body {
+    background-color: var(--ui-bg-color);
+    color: var(--ui-text-color-regular);
+    font-size: var(--ui-font-size-base);
+    overflow-wrap: break-word;
+}
+
+:where(div, span) {
+    margin: 0;
+    padding: 0;
+}
+
+:where(span) {
+    vertical-align: middle;
+}
+
+/* Use only when inherited defaults are insufficient, e.g. headings or links. */
+.text {
+    color: var(--ui-text-color-regular);
+    font-size: var(--ui-font-size-base);
+    margin: 0;
+    overflow-wrap: break-word;
+    padding: 0;
+    vertical-align: middle;
+}
+
+.text-large {
+    font-size: var(--ui-font-size-large);
+}
+
+.text-medium {
+    font-size: var(--ui-font-size-medium);
+}
+
+.text-small {
+    font-size: var(--ui-font-size-extra-small);
+}
+
+.text-regular {
+    color: var(--ui-text-color-regular);
+}
+
+.text-secondary {
+    color: var(--ui-text-color-secondary);
+}
+
+.text-primary {
+    color: var(--ui-color-primary);
+}
+
+.text-danger {
+    color: var(--ui-color-danger);
+}
+
+.text-warning {
+    color: var(--ui-color-warning);
+}
+
+.text-success {
+    color: var(--ui-color-success);
+}
+
+.text-info {
+    color: var(--ui-color-info);
+}

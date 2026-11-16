@@ -1,28 +1,30 @@
-import { createI18n } from 'vue-i18n'
-import { dev } from '@/i18n/locales/dev'
-import { zhCn } from '@/i18n/locales/zh-cn'
-import { de } from '@/i18n/locales/de'
-import { en } from './locales/en'
-import { pl } from './locales/pl'
+import { createI18n } from 'vue-i18n';
+import type { DefineLocaleMessage } from 'vue-i18n';
+
+import de from './locales/de';
+import dev from './locales/dev';
+import en from './locales/en';
+import pl from './locales/pl';
+import zhCn from './locales/zh-cn';
 
 /**
  * 获取所有语言
  */
-function getMessages (): Record<string, any> {
-    const messages: Record<string, any> = {}
-    messages[dev.local] = dev
-    messages[zhCn.local] = zhCn
-    messages[de.local] = de
-    messages[en.local] = en
-    messages[pl.local] = pl
-    return messages
+function getMessages(): Record<string, DefineLocaleMessage> {
+    const messages: Record<string, DefineLocaleMessage> = {};
+    messages[dev.local] = dev;
+    messages[zhCn.local] = zhCn;
+    messages[de.local] = de;
+    messages[en.local] = en;
+    messages[pl.local] = pl;
+    return messages;
 }
 
 /**
  * 获取默认语言
  */
-function getDefaultLocale () {
-    return "en"
+function getDefaultLocale() {
+    return 'en';
 }
 
 /**
@@ -32,13 +34,14 @@ export default createI18n({
     legacy: false,
     fallbackLocale: {
         'zh-cn': ['dev'],
-        'en': ['dev'],
-        'de': ['en'],
-        'pl': ['en'],
+        en: ['dev'],
+        de: ['en'],
+        pl: ['en'],
+        'zh-tw': ['zh-cn'],
     },
     fallbackWarn: false,
     missingWarn: false,
     warnHtmlMessage: false,
     locale: getDefaultLocale(),
     messages: getMessages(),
-})
+});

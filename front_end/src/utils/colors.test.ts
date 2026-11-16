@@ -1,0 +1,82 @@
+import { describe, expect, it } from 'vitest';
+
+import { PiecewiseColorScheme } from './colors';
+
+describe('PiecewiseColorScheme', () => {
+    describe('constructor', () => {
+        it('Rejects unsorted thresholds', () => {
+            expect(() => new PiecewiseColorScheme(['a', 'b', 'c'], [2, 1, 3])).toThrow('Thresholds must be either ascending or descending');
+        });
+    });
+
+    describe('createFromTheme', () => {
+        it('Creates color scheme from theme object', () => {
+            const scheme = PiecewiseColorScheme.createFromTheme({
+                thresholds: [10, 20],
+                colors: ['low', 'middle', 'high'],
+            });
+
+            expect(scheme.getColor(15)).toBe('middle');
+        });
+    });
+
+    describe('getColor', () => {
+        it('Ascending thresholds', () => {
+            const scheme = new PiecewiseColorScheme(['low', 'middle', 'high'], [10, 20]);
+
+            expect(scheme.getColor(5)).toBe('low');
+            expect(scheme.getColor(10)).toBe('low');
+            expect(scheme.getColor(15)).toBe('middle');
+            expect(scheme.getColor(25)).toBe('high');
+        });
+
+        it('Descending thresholds', () => {
+            const scheme = new PiecewiseColorScheme(['fast', 'normal', 'slow'], [20, 10]);
+
+            expect(scheme.getColor(25)).toBe('fast');
+            expect(scheme.getColor(20)).toBe('fast');
+            expect(scheme.getColor(15)).toBe('normal');
+            expect(scheme.getColor(5)).toBe('slow');
+        });
+
+        it('Returns transparent color for NaN', () => {
+            const scheme = new PiecewiseColorScheme(['low', 'high'], [10]);
+
+            expect(scheme.getColor(NaN)).toBe('rgba(0,0,0,0)');
+        });
+
+        it('Returns transparent bucket colors without changing threshold ownership', () => {
+            const scheme = new PiecewiseColorScheme(['rgba(0,0,0,0)', '#000000', 'rgba(0,0,0,0)'], [10, 20]);
+            expect(scheme.getColor(10)).toBe('rgba(0,0,0,0)');
+            expect(scheme.getColor(20)).toBe('#000000');
+            expect(scheme.getColor(21)).toBe('rgba(0,0,0,0)');
+        });
+    });
+
+    describe('getStyle', () => {
+        it('Returns precomputed background and readable text colors', () => {
+            const scheme = new PiecewiseColorScheme(['#ffffff', '#000000'], [10]);
+
+            expect(scheme.getStyle(5)).toEqual({ backgroundColor: '#ffffff', color: '#000000' });
+            expect(scheme.getStyle(15)).toEqual({ backgroundColor: '#000000', color: '#ffffff' });
+        });
+
+        it('Reuses style objects for the same color bucket', () => {
+            const scheme = new PiecewiseColorScheme(['#ffffff', '#000000'], [10]);
+
+            expect(scheme.getStyle(5)).toBe(scheme.getStyle(10));
+        });
+
+        it('Returns an empty style without overriding inherited styles for NaN', () => {
+            const scheme = new PiecewiseColorScheme(['#ffffff', '#000000'], [10]);
+
+            expect(scheme.getStyle(NaN)).toEqual({});
+        });
+
+        it('Does not override inherited text color for transparent color buckets', () => {
+            const scheme = new PiecewiseColorScheme(['rgba(255,255,255,0)', '#000000'], [10]);
+
+            expect(scheme.getStyle(5)).toEqual({});
+        });
+    });
+});

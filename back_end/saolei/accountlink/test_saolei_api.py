@@ -1,0 +1,599 @@
+from contextlib import nullcontext
+from datetime import timedelta
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+from django.core.files.base import ContentFile
+from django.core.management import call_command, CommandError
+from django.db import connection
+from django.db.migrations import DeleteModel
+from django.db.migrations.executor import MigrationExecutor
+from django.test import Client as DjangoClient, override_settings, TestCase, TransactionTestCase
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+import httpx
+from saolei_api import Client, RateLimitError, ResponseError, VideoFile, VideoInfo, VideoListResponse
+
+from config.text_choices import MS_TextChoices
+from identifier.models import Identifier
+from msuser.models import UserMS
+from userprofile.models import UserProfile
+from utils.exceptions import ExceptionToResponse
+from utils.parser import MSVideoParser
+from videomanager.files import original_file
+from videomanager.models import ExpandVideoModel, VideoModel
+from .models import AccountLinkQueue, AccountSaolei, Platform, SaoleiApiVideo
+from .saolei.services import import_saolei_video, save_catalogue_page, sync_saolei_catalogue, update_saolei_account_info
+
+FIXTURE = Path(__file__).resolve().parents[1] / 'common/test_fixtures/video_upload_ranking/beginner_personal.evf'
+
+
+def remote_video(remote_id=1, **changes):
+    return {
+        'id': remote_id, 'level': 'beg', 'userId': 101, 'userName': 'Remote', 'hash': 'ignored',
+        'status': 20, 'uploadTime': 1681657187, 'reviewTime': 1681657187,
+        'realTime': 1000, 'board3bv': 4, '3bvs': 4000, 'nf': False,
+        'software': 'Arbiter', 'version': '0.52', **changes,
+    }
+
+
+def remote_page(items, cursor=0, following=None, more=False):
+    return {
+        'generatedAt': 1, 'items': items, 'cursor': cursor, 'size': 200,
+        'nextCursor': following if following is not None else max([cursor, *[item['id'] for item in items]]),
+        'hasMore': more,
+    }
+
+
+def bound_account(remote_id=101, username='saolei_import'):
+    user = UserProfile.objects.create_user(username=username, email=f'{username}@example.com')
+    account = AccountSaolei.objects.create(pk=remote_id, parent=user)
+    AccountLinkQueue.objects.create(platform=Platform.SAOLEI, identifier=str(remote_id), userprofile=user, verified=True)
+    return user, account
+
+
+class SaoleiCatalogueTests(TestCase):
+    def setUp(self):
+        self.user, self.account = bound_account()
+
+    def test_profile_updates_only_basic_fields_and_keeps_directory_progress(self):
+        completed_at = timezone.now() - timedelta(days=1)
+        self.account.video_update_time = completed_at
+        self.account.video_sync_cursor = 91
+        self.account.save(update_fields=['video_update_time', 'video_sync_cursor'])
+        client = Mock()
+        client.user_info.return_value.users = [SimpleNamespace(id=101, name='新名字', banned=True)]
+        update_saolei_account_info(self.account, client)
+        self.account.refresh_from_db()
+        self.assertEqual((self.account.name, self.account.banned), ('新名字', True))
+        self.assertEqual((self.account.video_update_time, self.account.video_sync_cursor), (completed_at, 91))
+
+    def test_page_and_cursor_rollback_together_on_ownership_conflict(self):
+        _, other = bound_account(102, 'other_source')
+        SaoleiApiVideo.objects.create(remote_id=2, user=other, upload_time=timezone.now(), level='b', software='Clone', status=20)
+        page = VideoListResponse.model_validate(remote_page([remote_video(1), remote_video(2)]))
+        with self.assertRaises(ExceptionToResponse):
+            save_catalogue_page(self.account, page, cursor=0, upper_bound=10)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.video_sync_cursor, 0)
+        self.assertFalse(SaoleiApiVideo.objects.filter(remote_id=1).exists())
+
+    def test_failed_page_resumes_from_committed_cursor_and_saves_unsupported_metadata(self):
+        client = Mock()
+        client.video_list.side_effect = [
+            VideoListResponse.model_validate(remote_page([remote_video(1, software='Saolei.wang', status=0)], more=True)),
+            ResponseError('offline failure'),
+        ]
+        with self.assertRaises(ResponseError):
+            sync_saolei_catalogue(self.account, client, upper_bound=10)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.video_sync_cursor, 1)
+        self.assertIsNone(self.account.video_update_time)
+        self.assertEqual(SaoleiApiVideo.objects.get(remote_id=1).software, 'Saolei.wang')
+        client.video_list.side_effect = None
+        client.video_list.return_value = VideoListResponse.model_validate(remote_page([remote_video(2)], cursor=1))
+        sync_saolei_catalogue(self.account, client, upper_bound=10)
+        client.video_list.assert_called_with(player_id=101, cursor=1, size=200)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.video_sync_cursor, 2)
+        self.assertTrue(SaoleiApiVideo.objects.filter(remote_id=2).exists())
+        self.assertIsNotNone(self.account.video_update_time)
+
+    def test_snapshot_boundary_does_not_skip_unprocessed_tail(self):
+        client = Mock()
+        client.video_list.return_value = VideoListResponse.model_validate(remote_page([remote_video(1), remote_video(11)], more=True))
+        sync_saolei_catalogue(self.account, client, upper_bound=10)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.video_sync_cursor, 10)
+        self.assertFalse(SaoleiApiVideo.objects.filter(remote_id=11).exists())
+        client.video_list.assert_called_once()
+        client.video_list.return_value = VideoListResponse.model_validate(remote_page([remote_video(11)], cursor=10))
+        sync_saolei_catalogue(self.account, client, upper_bound=11)
+        client.video_list.assert_called_with(player_id=101, cursor=10, size=200)
+        self.assertTrue(SaoleiApiVideo.objects.filter(remote_id=11).exists())
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.video_sync_cursor, 11)
+
+    def test_empty_final_page_does_not_need_to_advance_cursor(self):
+        self.account.video_sync_cursor = 1
+        self.account.save(update_fields=['video_sync_cursor'])
+        client = Mock()
+        client.video_list.return_value = VideoListResponse.model_validate(remote_page([], cursor=1))
+        sync_saolei_catalogue(self.account, client, upper_bound=10)
+        client.video_list.assert_called_once_with(player_id=101, cursor=1, size=200)
+
+    def test_last_page_with_null_next_cursor_is_saved(self):
+        # The official API returns nextCursor=null on the last page; saolei-api 0.4.0 rejected it,
+        # so every catalogue lost its final page and counts only grew in whole pages.
+        client = Mock()
+        client.video_list.return_value = VideoListResponse.model_validate({**remote_page([remote_video(1)], more=False), 'nextCursor': None})
+        sync_saolei_catalogue(self.account, client, upper_bound=10)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.video_sync_cursor, 1)
+        self.assertTrue(SaoleiApiVideo.objects.filter(remote_id=1).exists())
+        self.assertIsNotNone(self.account.video_update_time)
+
+    def test_full_refresh_updates_metadata_without_regressing_saved_cursor(self):
+        page = VideoListResponse.model_validate(remote_page([remote_video(1)]))
+        save_catalogue_page(self.account, page, cursor=0, upper_bound=100)
+        source = SaoleiApiVideo.objects.get(remote_id=1)
+        source.import_rejected = True
+        source.save(update_fields=['import_rejected'])
+        self.account.video_sync_cursor = 90
+        self.account.save(update_fields=['video_sync_cursor'])
+        client = Mock()
+        client.video_list.return_value = VideoListResponse.model_validate(remote_page([remote_video(1, software='Vienna', status=99)]))
+        sync_saolei_catalogue(self.account, client, upper_bound=100, full=True)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.video_sync_cursor, 90)
+        source = SaoleiApiVideo.objects.get(remote_id=1)
+        self.assertEqual((source.software, source.status), ('Vienna', 99))
+        self.assertTrue(source.import_rejected)
+
+    def test_wrong_remote_owner_and_nonadvancing_cursor_leave_no_progress(self):
+        for page in [
+            remote_page([remote_video(userId=102)]),
+            remote_page([remote_video()], following=0, more=True),
+            remote_page([], more=True),
+            remote_page([remote_video(1)], cursor=1),
+        ]:
+            with self.subTest(page=page), self.assertRaises(ResponseError):
+                save_catalogue_page(self.account, VideoListResponse.model_validate(page), cursor=page['cursor'], upper_bound=10)
+        self.assertFalse(SaoleiApiVideo.objects.exists())
+
+    def test_stats_failure_reports_sdk_reason(self):
+        client = Mock()
+        client.stats.side_effect = ResponseError('Invalid JSON or response schema for stats')
+        with patch('accountlink.management.commands.sync_saolei_api.saolei_client', return_value=nullcontext(client)):
+            with self.assertRaisesMessage(CommandError, 'ResponseError: Invalid JSON or response schema for stats'):
+                call_command('sync_saolei_api', account_id=[101], stdout=StringIO(), stderr=StringIO())
+
+
+@override_settings(BAIDU_VERIFY_SKIP=True)
+class SaoleiImportTests(TestCase):
+    def setUp(self):
+        self.user, self.account = bound_account()
+        self.media = TemporaryDirectory()
+        self.addCleanup(self.media.cleanup)
+        self.override = override_settings(MEDIA_ROOT=self.media.name)
+        self.override.enable()
+        self.addCleanup(self.override.disable)
+        self.content = FIXTURE.read_bytes()
+
+    def source(self, remote_id=1, account=None, **changes):
+        return SaoleiApiVideo.objects.create(remote_id=remote_id, user=account or self.account, upload_time=timezone.now() - timedelta(days=365), level='b', software=changes.pop('software', 'Arbiter'), status=changes.pop('status', 20), **changes)
+
+    def remote_client(self, source, **changes):
+        client = Mock()
+        detail = {
+            **remote_video(source.remote_id, userId=source.user_id, software=source.software, status=source.status, **changes),
+            'signature': None, 'metrics': None,
+        }
+        client.video_info.return_value.items = [VideoInfo.model_validate(detail)]
+        client.download_videos.return_value = [VideoFile(self.content, FIXTURE.name)]
+        return client
+
+    def test_all_statuses_import_with_identifier_validation_same_source_reuse_and_userms_persistence(self):
+        parser = MSVideoParser(ContentFile(self.content, FIXTURE.name))
+        Identifier.objects.create(identifier=parser.identifier, userms=None, safe=True)
+        source = self.source()
+        for status, software in zip((0, 10, 20, 99), ('Clone', 'Vienna', 'Arbiter', '元扫雷'), strict=True):
+            # 模拟同一来源在目录重建后重新关联已有本站录像。
+            source.status, source.software, source.import_video = status, software, None
+            source.save(update_fields=['status', 'software', 'import_video'])
+            with self.subTest(status=status):
+                self.assertEqual(import_saolei_video(source, self.remote_client(source, uploadTime=1681657187 - status)), 'imported')
+                source.refresh_from_db()
+                self.assertEqual(source.import_video.player_id, self.user.pk)
+                self.assertEqual(source.import_video.state, MS_TextChoices.State.IDENTIFIER)
+                self.assertEqual(int(source.import_video.upload_time.timestamp()), 1681657187 - status)
+        self.user.refresh_from_db()
+        self.assertIsNotNone(self.user.userms_id)
+        self.assertEqual(VideoModel.objects.count(), 1)
+        video = VideoModel.objects.get()
+        with original_file(video.file.name, video.compression_format, video.original_filename) as recording:
+            self.assertEqual(recording.read(), self.content)
+
+    def test_whitelist_is_exact_and_latest_detail_is_checked_before_download(self):
+        for number, software in enumerate(('Saolei.wang', 'Other', '', 'clone', '元3.3.4', '元扫雷3.3.4', '元扫雷3.3.5'), 1):
+            source = self.source(number, software=software)
+            client = Mock()
+            self.assertEqual(import_saolei_video(source, client), 'skipped')
+            client.video_info.assert_not_called()
+            client.download_videos.assert_not_called()
+        source = self.source(10)
+        client = self.remote_client(source)
+        client.video_info.return_value.items[0].software = 'Saolei.wang'
+        self.assertEqual(import_saolei_video(source, client), 'skipped')
+        client.download_videos.assert_not_called()
+        self.assertFalse(VideoModel.objects.exists())
+
+    def test_cross_owner_duplicate_never_changes_existing_video_or_links_source(self):
+        _, other_account = bound_account(102, 'other_player')
+        original_source = self.source(1, account=other_account)
+        import_saolei_video(original_source, self.remote_client(original_source))
+        existing = VideoModel.objects.get()
+        previous_time, previous_owner = existing.upload_time, existing.player_id
+        source = self.source(2)
+        client = self.remote_client(source, uploadTime=1)
+        with self.assertRaises(ExceptionToResponse) as caught:
+            import_saolei_video(source, client)
+        self.assertEqual(caught.exception.category, 'collision')
+        existing.refresh_from_db()
+        source.refresh_from_db()
+        self.assertEqual((existing.upload_time, existing.player_id), (previous_time, previous_owner))
+        self.assertIsNone(source.import_video_id)
+        self.assertEqual(VideoModel.objects.count(), 1)
+
+    def test_binding_changed_during_download_does_not_write_to_new_owner(self):
+        source = self.source()
+        client = self.remote_client(source)
+        replacement = UserProfile.objects.create_user(username='replacement')
+
+        def replace_binding(*args):
+            AccountSaolei.objects.filter(pk=self.account.pk).update(parent=replacement)
+            return [VideoFile(self.content, FIXTURE.name)]
+
+        client.download_videos.side_effect = replace_binding
+        with self.assertRaises(ExceptionToResponse) as caught:
+            import_saolei_video(source, client)
+        self.assertEqual(caught.exception.category, 'binding_changed')
+        self.assertFalse(VideoModel.objects.exists())
+
+    def test_missing_detail_keeps_source_retryable(self):
+        source = self.source()
+        client = self.remote_client(source)
+        client.video_info.return_value.items = []
+        with self.assertRaises(ExceptionToResponse):
+            import_saolei_video(source, client)
+        client.download_videos.assert_not_called()
+        source.refresh_from_db()
+        self.assertIsNone(source.import_video_id)
+        self.assertFalse(source.import_rejected)
+
+    def test_import_uses_remote_id_and_response_filename(self):
+        source = self.source()
+        client = self.remote_client(source)
+        self.assertEqual(import_saolei_video(source, client), 'imported')
+        client.download_videos.assert_called_once_with([1])
+
+    def test_id_reference_imports_with_response_filename(self):
+        source = self.source(remote_id=328090)
+        requests = []
+
+        def respond(request):
+            requests.append(request)
+            return httpx.Response(200, content=self.content, headers={'Content-Disposition': 'attachment; filename="328090.evf"'})
+
+        client = Client('sk-test-only', min_interval=0, download_interval=0, transport=httpx.MockTransport(respond))
+        with client:
+            self.assertEqual(import_saolei_video(source, client, refresh_detail=False), 'imported')
+        self.assertIn('https://saolei.wang/video/download/328090', [str(request.url) for request in requests])
+        self.assertEqual(VideoModel.objects.count(), 1)
+
+    def test_id_reference_without_filename_is_rejected_before_import(self):
+        source = self.source(remote_id=328090)
+        client = Client('sk-test-only', min_interval=0, download_interval=0, transport=httpx.MockTransport(lambda request: httpx.Response(200, content=self.content)))
+        with client:
+            with self.assertRaises(ExceptionToResponse) as caught:
+                import_saolei_video(source, client, refresh_detail=False)
+        self.assertEqual(caught.exception.category, 'type')
+        self.assertFalse(VideoModel.objects.exists())
+
+    def test_only_explicit_file_validation_rejections_disable_retry(self):
+        for remote_id, (obj, category, rejected) in enumerate([
+            ('file', 'review', True), ('file', 'incomplete', True), ('file', 'type', True), ('file', 'level', True),
+            ('file', 'collision', False), ('identifier', 'verify', False), ('rust', 'panic', False),
+        ], 1):
+            source = self.source(remote_id)
+            client = self.remote_client(source)
+            with self.subTest(obj=obj, category=category):
+                with patch('accountlink.saolei.services.MSVideoParser', side_effect=ExceptionToResponse(obj, category)):
+                    with self.assertRaises(ExceptionToResponse):
+                        import_saolei_video(source, client)
+                source.refresh_from_db()
+                self.assertEqual(source.import_rejected, rejected)
+                self.assertIsNone(source.import_video_id)
+        self.assertFalse(VideoModel.objects.exists())
+
+    def test_command_retries_rejected_source_and_succeeds(self):
+        source = self.source()
+        client = self.remote_client(source)
+        client.stats.return_value.max_video_id = 1
+        client.user_info.return_value.users = [SimpleNamespace(id=101, name='API name', banned=False)]
+        client.video_list.return_value = VideoListResponse.model_validate(remote_page([remote_video()]))
+        stderr = StringIO()
+        with patch('accountlink.management.commands.sync_saolei_api.saolei_client', return_value=nullcontext(client)):
+            with patch('accountlink.saolei.services.MSVideoParser', side_effect=ExceptionToResponse('file', 'review')):
+                with self.assertRaises(CommandError):
+                    call_command('sync_saolei_api', account_id=[101], stdout=StringIO(), stderr=stderr)
+            source.refresh_from_db()
+            self.account.refresh_from_db()
+            self.assertTrue(source.import_rejected)
+            self.assertIsNone(source.import_video_id)
+            self.assertEqual(self.account.video_sync_cursor, 1)
+            self.assertIn('file/review', stderr.getvalue())
+            client.download_videos.assert_called_once()
+            client.reset_mock()
+            stdout = StringIO()
+            call_command('sync_saolei_api', account_id=[101], full=True, stdout=stdout, stderr=StringIO())
+            self.assertIn('导入 1，跳过 0，失败 0', stdout.getvalue())
+            client.video_list.assert_called_once()
+            source.refresh_from_db()
+            self.assertTrue(source.import_rejected)
+            self.assertEqual(import_saolei_video(source, client), 'existing')
+            client.video_info.assert_not_called()
+            client.download_videos.assert_called_once()
+            self.assertEqual(VideoModel.objects.count(), 1)
+
+    def test_command_resumes_directory_and_recovers_previously_committed_pending_file(self):
+        requests = []
+        fail_download = True
+
+        def respond(request):
+            requests.append(request)
+            endpoint = request.url.path.rsplit('/', 1)[-1]
+            if endpoint == 'stats':
+                return httpx.Response(200, json={'generatedAt': 1, 'maxVideoId': 1, 'maxUserId': 101, 'stats': dict.fromkeys(['userTotal', 'rankedTotal', 'videoTotal', 'videoCommentTotal', 'bbsTopicTotal', 'bbsReplyTotal', 'practiceTotal'], 1)})
+            if endpoint == 'user_info':
+                score = {'time': 1, 'timeVideoId': 0, '3bvs': 1, '3bvsVideoId': 0}
+                scores = {'beg': score, 'int': score, 'exp': score, 'sum': {'time': 3, '3bvs': 3}}
+                return httpx.Response(200, json={'generatedAt': 1, 'users': [{'id': 101, 'name': 'API name', 'banned': False, 'englishName': '', 'sex': 0, 'area': '', 'registeredAt': 1, 'scores': scores, 'scoresNf': scores, 'signatures': []}]})
+            if endpoint == 'video_list':
+                self.assertEqual(request.url.params['player_id'], '101')
+                cursor = int(request.url.params['cursor'])
+                return httpx.Response(200, json=remote_page([remote_video()] if cursor == 0 else [], cursor=cursor))
+            if endpoint == 'video_info':
+                return httpx.Response(200, json={'generatedAt': 1, 'items': [{**remote_video(), 'signature': None, 'metrics': None}]})
+            return httpx.Response(503 if fail_download else 200, content=self.content, headers={'Content-Disposition': 'attachment; filename="sample.evf"'})
+
+        def client_factory():
+            return Client('sk-test-only', min_interval=0, download_interval=0, transport=httpx.MockTransport(respond))
+
+        target = 'accountlink.management.commands.sync_saolei_api.saolei_client'
+        with patch(target, side_effect=client_factory):
+            with self.assertRaises(CommandError):
+                call_command('sync_saolei_api', account_id=[101], stdout=StringIO(), stderr=StringIO())
+            self.account.refresh_from_db()
+            self.assertEqual(self.account.video_sync_cursor, 1)
+            self.assertFalse(VideoModel.objects.exists())
+            self.assertTrue(SaoleiApiVideo.objects.get(remote_id=1).import_rejected)
+            fail_download = False
+            requests.clear()
+            call_command('sync_saolei_api', account_id=[101], stdout=StringIO(), stderr=StringIO())
+        self.assertTrue(SaoleiApiVideo.objects.get(remote_id=1).import_video_id)
+        self.assertEqual(VideoModel.objects.count(), 1)
+        self.assertIn('https://saolei.wang/video/download/1', [str(request.url) for request in requests])
+        # 游标已到达本轮上界，无需再请求目录，仍补导了本地未完成录像。
+        self.assertNotIn('video_list', [request.url.path.rsplit('/', 1)[-1] for request in requests])
+
+    def test_profile_failure_does_not_abort_catalogue_or_file_import(self):
+        source = self.source()
+        client = self.remote_client(source)
+        client.stats.return_value.max_video_id = 1
+        client.user_info.side_effect = ResponseError('Unavailable profile')
+        client.video_list.return_value = VideoListResponse.model_validate(remote_page([remote_video()]))
+        stderr = StringIO()
+        with patch('accountlink.management.commands.sync_saolei_api.saolei_client', return_value=nullcontext(client)):
+            with self.assertLogs('accountlink', level='ERROR') as logs, self.assertRaises(CommandError):
+                call_command('sync_saolei_api', account_id=[101], stdout=StringIO(), stderr=stderr)
+        self.assertIn('账号#101 资料 失败：ResponseError: Unavailable profile', stderr.getvalue())
+        self.assertTrue(any('ResponseError: Unavailable profile' in message for message in logs.output))
+        source.refresh_from_db()
+        self.assertIsNotNone(source.import_video_id)
+        self.assertTrue(AccountLinkQueue.objects.filter(userprofile=self.user, verified=True).exists())
+
+    def test_rate_limit_stops_without_retry_or_advancing_directory(self):
+        source = self.source()
+        client = self.remote_client(source)
+        client.stats.return_value.max_video_id = 1
+        client.user_info.side_effect = RateLimitError('user_info', 5)
+        with patch('accountlink.management.commands.sync_saolei_api.saolei_client', return_value=nullcontext(client)):
+            with self.assertRaisesMessage(CommandError, 'Retry-After=5'):
+                call_command('sync_saolei_api', account_id=[101], stdout=StringIO(), stderr=StringIO())
+        client.user_info.assert_called_once()
+        client.video_list.assert_not_called()
+        client.download_videos.assert_not_called()
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.video_sync_cursor, 0)
+
+
+MEMORIAL_BASE = '/api/accountlink/saolei'
+
+
+@override_settings(RATELIMIT_ENABLE=False, BAIDU_VERIFY_SKIP=True)
+class SaoleiMemorialAdminTests(TestCase):
+    """纪念账号无法登录，改由站长操作其扫雷网录像；普通账号的本人限制保持不变。"""
+
+    def setUp(self):
+        self.memorial = UserProfile.objects.create_user(pk=2001, username='memorial-player', email='memorial-player@accounts.invalid', is_memorial=True, is_active=False, userms=UserMS.objects.create(pk=2002))
+        self.account = AccountSaolei.objects.create(pk=3001, parent=self.memorial)
+        AccountLinkQueue.objects.create(platform=Platform.SAOLEI, identifier='3001', userprofile=self.memorial, verified=True)
+        self.superuser = UserProfile.objects.create_user(username='owner-saolei', email='owner-saolei@example.com', is_superuser=True)
+        self.staff = UserProfile.objects.create_user(username='staff-saolei', email='staff-saolei@example.com', is_staff=True)
+        self.ordinary = UserProfile.objects.create_user(username='ordinary-saolei', email='ordinary-saolei@example.com')
+        self.page_client = Mock()
+
+    def start(self):
+        upstream = patch('accountlink.saolei.api.upstream_client', return_value=nullcontext(self.page_client))
+        self.page_client.stats.return_value.max_video_id = 10
+        return upstream
+
+    def test_superuser_reads_and_syncs_a_memorial_account(self):
+        self.client.force_login(self.superuser)
+        self.assertEqual(self.client.get(f'{MEMORIAL_BASE}/3001/summary').status_code, 200)
+        self.assertEqual(self.client.get(f'{MEMORIAL_BASE}/3001/videos').status_code, 200)
+        with self.start(), patch('accountlink.saolei.api.sync_saolei_page', return_value=(5, True)) as page:
+            response = self.client.post(f'{MEMORIAL_BASE}/3001/sync/page', {'cursor': 0, 'upper_bound': 10}, content_type='application/json')
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(response.json(), {'cursor': 5, 'has_more': True})
+            page.assert_called_once()
+            start = self.client.post(f'{MEMORIAL_BASE}/3001/sync/start', {'full': True}, content_type='application/json')
+            self.assertEqual(start.status_code, 200, start.content)
+            self.assertEqual(start.json(), {'cursor': 0, 'upper_bound': 10})
+
+    def test_staff_manages_a_memorial_account_like_its_owner(self):
+        """管理员可以同步、导入、刷新资料并修改纪念账号的自动同步设置。"""
+        self.client.force_login(self.staff)
+        with self.start(), patch('accountlink.saolei.api.sync_saolei_page', return_value=(5, True)):
+            response = self.client.post(f'{MEMORIAL_BASE}/3001/sync/page', {'cursor': 0, 'upper_bound': 10}, content_type='application/json')
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(self.client.post(f'{MEMORIAL_BASE}/3001/sync/start', {'full': True}, content_type='application/json').status_code, 200)
+        with self.start(), patch('accountlink.saolei.api.update_saolei_account_info') as update:
+            response = self.client.post(f'{MEMORIAL_BASE}/3001/profile')
+            self.assertEqual(response.status_code, 200, response.content)
+            update.assert_called_once()
+        response = self.client.post(f'{MEMORIAL_BASE}/3001/settings', {'auto_sync': False}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        self.account.refresh_from_db()
+        self.assertFalse(self.account.auto_sync)
+
+    def test_ordinary_users_stay_outside_the_memorial_bypass(self):
+        self.client.force_login(self.ordinary)
+        with self.start():
+            self.assertEqual(self.client.post(f'{MEMORIAL_BASE}/3001/sync/page', {'cursor': 0, 'upper_bound': 10}, content_type='application/json').status_code, 403)
+            self.assertEqual(self.client.get(f'{MEMORIAL_BASE}/3001/summary').status_code, 200)
+        self.assertEqual(self.client.post(f'{MEMORIAL_BASE}/3001/profile').status_code, 403)
+        self.assertEqual(self.client.post(f'{MEMORIAL_BASE}/3001/settings', {'auto_sync': False}, content_type='application/json').status_code, 403)
+
+    def test_bypass_is_limited_to_memorial_accounts(self):
+        regular = UserProfile.objects.create_user(username='regular-saolei', email='regular-saolei@example.com')
+        AccountSaolei.objects.create(pk=3002, parent=regular)
+        AccountLinkQueue.objects.create(platform=Platform.SAOLEI, identifier='3002', userprofile=regular, verified=True)
+        self.client.force_login(self.superuser)
+        with self.start():
+            self.assertEqual(self.client.post(f'{MEMORIAL_BASE}/3002/sync/page', {'cursor': 0, 'upper_bound': 10}, content_type='application/json').status_code, 403)
+            self.assertEqual(self.client.post(f'{MEMORIAL_BASE}/3002/profile').status_code, 403)
+
+    def test_memorial_sync_requires_a_session_and_admin_csrf(self):
+        anonymous = DjangoClient(enforce_csrf_checks=True)
+        self.assertEqual(anonymous.post(f'{MEMORIAL_BASE}/3001/sync/page', {'cursor': 0, 'upper_bound': 10}, content_type='application/json').status_code, 403)
+        admin = DjangoClient(enforce_csrf_checks=True)
+        admin.force_login(self.superuser)
+        with self.start():
+            self.assertEqual(admin.post(f'{MEMORIAL_BASE}/3001/sync/start', {'full': False}, content_type='application/json').status_code, 403)
+            self.assertEqual(admin.get('/api/common/admin/memorial/users/2001/videos').status_code, 200)
+            csrf = admin.cookies['csrftoken'].value
+            allowed = admin.post(f'{MEMORIAL_BASE}/3001/sync/start', {'full': False}, content_type='application/json', HTTP_X_CSRFTOKEN=csrf)
+            self.assertEqual(allowed.status_code, 200, allowed.content)
+
+    def test_owner_can_still_sync_their_own_account_without_csrf(self):
+        own = AccountSaolei.objects.create(pk=4001, parent=self.staff)
+        AccountLinkQueue.objects.create(platform=Platform.SAOLEI, identifier='4001', userprofile=self.staff, verified=True)
+        self.client.force_login(self.staff)
+        with self.start(), patch('accountlink.saolei.api.sync_saolei_page', return_value=(7, False)):
+            response = self.client.post(f'{MEMORIAL_BASE}/4001/sync/page', {'cursor': 0, 'upper_bound': 10}, content_type='application/json')
+            self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(own.parent_id, self.staff.pk)
+
+
+class SaoleiSourceMigrationTests(TransactionTestCase):
+    def test_replacing_old_table_preserves_account_native_video_expansion_and_file(self):
+        executor = MigrationExecutor(connection)
+        replacement = next((migration for (app, _), migration in executor.loader.disk_migrations.items() if app == 'accountlink' and any(isinstance(operation, DeleteModel) and operation.name == 'VideoSaolei' for operation in migration.operations)), None)
+        if replacement is None:
+            self.skipTest('Fresh installations have no legacy source table to replace')
+        before = [dependency for dependency in replacement.dependencies if dependency[0] == 'accountlink']
+        after = [node for node in executor.loader.graph.leaf_nodes() if node[0] == 'accountlink']
+        executor.migrate(before)
+        try:
+            old_apps = executor.loader.project_state(before).apps
+            user = UserProfile.objects.create_user(username='migration_player')
+            parser = MSVideoParser(ContentFile(FIXTURE.read_bytes(), FIXTURE.name))
+            with TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+                video = VideoModel.create_from_parser(parser, user, original_hash='a' * 24)
+                old_account = old_apps.get_model('accountlink', 'AccountSaolei').objects.create(pk=101, parent_id=user.pk, name='Saved')
+                old_apps.get_model('accountlink', 'VideoSaolei').objects.create(pk=video.pk, user_id=old_account.pk, upload_time=timezone.now(), level='b', state='o', import_video_id=video.pk)
+                executor = MigrationExecutor(connection)
+                executor.migrate(after)
+                self.assertTrue(VideoModel.objects.filter(pk=video.pk, video_id=video.video_id).exists())
+                self.assertTrue(Path(video.file.path).exists())
+                self.assertEqual(AccountSaolei.objects.get(pk=101).parent_id, user.pk)
+                self.assertEqual(AccountSaolei.objects.get(pk=101).video_sync_cursor, 0)
+                self.assertFalse(SaoleiApiVideo.objects.exists())
+                self.assertNotIn('accountlink_videosaolei', connection.introspection.table_names())
+        finally:
+            MigrationExecutor(connection).migrate(after)
+
+
+EXPORT_BASE = '/api/accountlink/saolei'
+
+
+@override_settings(RATELIMIT_ENABLE=False, BAIDU_VERIFY_SKIP=True)
+class SaoleiExportApiTests(TestCase):
+    def setUp(self):
+        self.user, self.account = bound_account()
+        self.other_user, self.other_account = bound_account(102, 'saolei_export_other')
+        self.unlinked = UserProfile.objects.create_user(username='saolei_export_unlinked')
+
+    def create_video(self, player):
+        return VideoModel.objects.create(
+            player=player, video=ExpandVideoModel.objects.create(), file='export.evf', software='e', level='b', mode='00',
+        )
+
+    def unmapped(self, **params):
+        response = self.client.get(f'{EXPORT_BASE}/unmapped_videos', params)
+        self.assertEqual(response.status_code, 200, response.content)
+        return response.json()
+
+    def test_unmapped_videos_skip_mapped_and_unlinked_and_paginate_by_local_id(self):
+        first = self.create_video(self.user)
+        mapped = self.create_video(self.other_user)
+        self.create_video(self.unlinked)
+        other = self.create_video(self.other_user)
+        last = self.create_video(self.user)
+        SaoleiApiVideo.objects.create(remote_id=1, user=self.other_account, upload_time=timezone.now(), level='b', software='Arbiter', status=20, import_video=mapped)
+
+        items = self.unmapped()
+        self.assertEqual([item['video_id'] for item in items], [first.pk, other.pk, last.pk])
+        self.assertEqual([item['saolei_id'] for item in items], [101, 102, 101])
+        self.assertEqual(parse_datetime(items[0]['upload_time']).replace(microsecond=0), first.upload_time.replace(microsecond=0))
+        self.assertEqual([item['video_id'] for item in self.unmapped(cursor=other.pk)], [other.pk, last.pk])
+        self.assertEqual([item['video_id'] for item in self.unmapped(count=2)], [first.pk, other.pk])
+        self.assertEqual([item['video_id'] for item in self.unmapped(user_id=self.user.pk)], [first.pk, last.pk])
+        self.assertEqual([item['video_id'] for item in self.unmapped(user_id=self.other_user.pk)], [other.pk])
+        self.assertEqual(self.unmapped(user_id=self.unlinked.pk), [])
+        self.assertEqual(self.unmapped(user_id=999999), [])
+        self.assertEqual(self.unmapped(cursor=last.pk + 1), [])
+
+    def test_account_mapping_accepts_either_id_list_and_omits_unknown_ids(self):
+        response = self.client.get(f'{EXPORT_BASE}/account_mapping', {'saolei_ids': '102,101,999,101'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json(), [
+            {'saolei_id': 101, 'user_id': self.user.pk},
+            {'saolei_id': 102, 'user_id': self.other_user.pk},
+        ])
+        response = self.client.get(f'{EXPORT_BASE}/account_mapping', {'user_ids': f'{self.other_user.pk},{self.unlinked.pk}'})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json(), [{'saolei_id': 102, 'user_id': self.other_user.pk}])
+
+    def test_account_mapping_rejects_ambiguous_or_invalid_id_lists(self):
+        for params in [
+            {}, {'saolei_ids': '101', 'user_ids': '1'}, {'saolei_ids': ','.join(map(str, range(1, 102)))},
+            {'user_ids': 'abc'}, {'saolei_ids': ''},
+        ]:
+            with self.subTest(params=params):
+                self.assertEqual(self.client.get(f'{EXPORT_BASE}/account_mapping', params).status_code, 400)

@@ -2,5 +2,8 @@ from django.apps import AppConfig
 
 
 class AccountLinkConfig(AppConfig):
-    default_auto_field = "django.db.models.BigAutoField"
-    name = "accountlink"
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'accountlink'
+
+    def ready(self):
+        from . import signals  # noqa: F401

@@ -152,6 +152,9 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# Cypress tests
+front_end/cypress/screenshots/
+
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
@@ -168,9 +171,25 @@ front_end/public/flopold
 **/*.zip
 *.rar
 **/secrets.json
+**/secrets.json.lock
 front_end/src/assets/article
-front_end/package-lock.json
 front_end/yarn.lock
+/front_end/src/styles/parameters/
 **/migrations/*
 !**/migrations/__init__.py
 *.tmp
+/.tmp/
+/back_end/saolei/.vscode
+/vitepress_doc/.vitepress/.temp
+/vitepress_doc/.vitepress/cache
+/vitepress_doc/node_modules
+.vscode/settings.json
+/.django-stub-gen
+/back_end/saolei/tmp/
+# Local cross-process ranking lock; never remove while workers are running.
+/back_end/saolei/runtime/
+
+# Local medal design drafts and implementation notes; not release assets.
+/docs/medal/artwork-drafts/
+/docs/medal/勋章界面改版计划.md
+/docs/medal/勋章美术与配色改版计划.md
